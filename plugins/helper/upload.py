@@ -497,13 +497,25 @@ async def download_ytdlp(
         if cancel_ref and cancel_ref[0]:
             raise asyncio.CancelledError("Download cancelled by user.")
 
+        done = d.get("downloaded_bytes", 0)
+        total = d.get("total_bytes") or d.get("total_bytes_estimate") or d.get("filesize") or d.get("filesize_approx", 0)
+        speed = d.get("speed") or 0
+        eta = d.get("eta") or 0
+        percent = (done / total * 100) if total else 0
+
+        # 1. Update global WebApp tracker FREQUENTLY
+        WEBAPP_PROGRESS[user_id] = {
+            "action": "Downloading Media...",
+            "current": humanbytes(done),
+            "total": humanbytes(total) if total else "Unknown",
+            "speed": f"{humanbytes(speed)}/s" if speed else "",
+            "percentage": max(1, round(percent, 1))
+        }
+
+        # 2. Update Telegram message INFREQUENTLY
         now = time.time()
         if d["status"] == "downloading" and now - last_edit[0] >= PROGRESS_UPDATE_DELAY:
             last_edit[0] = now
-            done = d.get("downloaded_bytes", 0)
-            total = d.get("total_bytes") or d.get("total_bytes_estimate") or d.get("filesize") or d.get("filesize_approx", 0)
-            speed = d.get("speed") or 0
-            eta = d.get("eta") or 0
             bar = progress_bar(done, total) if total else "░" * 12
             pct = f"{done / total * 100:.1f}%" if total else "…"
             text = (
@@ -515,15 +527,6 @@ async def download_ytdlp(
                 + (f"\n**Speed:** {humanbytes(speed)}/s" if speed else "")
                 + (f"\n**ETA:** {time_formatter(eta)}" if eta else "")
             )
-            # Update global WebApp tracker
-            percent = (done / total * 100) if total else 0
-            WEBAPP_PROGRESS[user_id] = {
-                "action": "Downloading Media...",
-                "current": humanbytes(done),
-                "total": humanbytes(total) if total else "Unknown",
-                "speed": f"{humanbytes(speed)}/s" if speed else "",
-                "percentage": max(1, round(percent, 1))
-            }
             asyncio.run_coroutine_threadsafe(
                 _safe_edit(progress_msg, text, reply_markup=cancel_button(user_id)),
                 loop
@@ -1166,15 +1169,25 @@ async def _download_aria2c(url: str, out_path: str, progress_msg, start_time_ref
                 await asyncio.to_thread(download.remove, force=True, files=True)
                 raise RuntimeError(f"aria2c download failed: {error_msg}")
 
+            pct_int = int(download.progress)
+            _bar = progress_bar(pct_int, 100)
+            
+            speed_str = download.download_speed_string()
+            current_str = download.completed_length_string()
+            total_str = download.total_length_string()
+
+            # 1. Update global WebApp tracker FREQUENTLY (every 200ms)
+            WEBAPP_PROGRESS[user_id] = {
+                "action": "Downloading...",
+                "current": current_str,
+                "total": total_str,
+                "speed": speed_str,
+                "percentage": pct_int
+            }
+
+            # 2. Update Telegram message INFREQUENTLY (every 1s) to avoid flood
             now = time.time()
             if now - last_edit >= PROGRESS_UPDATE_DELAY:
-                pct_int = int(download.progress)
-                _bar = progress_bar(pct_int, 100)
-                
-                speed_str = download.download_speed_string()
-                current_str = download.completed_length_string()
-                total_str = download.total_length_string()
-
                 text = (
                     f"📥 **Downloading Media…** ⬇️\n\n"
                     f"📁 **Name:** `{os.path.basename(out_path)}`\n"
@@ -1183,21 +1196,13 @@ async def _download_aria2c(url: str, out_path: str, progress_msg, start_time_ref
                     f"**Speed:** {speed_str}\n"
                     f"**ETA:** {download.eta_string()}"
                 )
-                
-                WEBAPP_PROGRESS[user_id] = {
-                    "action": "Downloading...",
-                    "current": current_str,
-                    "total": total_str,
-                    "speed": speed_str,
-                    "percentage": pct_int
-                }
                 try:
                     await progress_msg.edit_text(text, reply_markup=cancel_button(user_id))
                 except Exception:
                     pass
                 last_edit = now
 
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.2) # High frequency polling for smooth UI
 
         return out_path
     except Exception:
@@ -1239,30 +1244,32 @@ async def upload_file(
         if cancel_ref and cancel_ref[0]:
             raise asyncio.CancelledError("Upload cancelled.")
             
-        now = time.time()
-        if now - last_edit[0] < PROGRESS_UPDATE_DELAY:
-            return
-        elapsed = now - start_time_ref[0]
-        speed = current / elapsed if elapsed else 0
-        eta = (total - current) / speed if speed else 0
-        bar = progress_bar(current, total)
-        text = (
-            "📤 **Uploading…**\n\n"
-            f"📁 **Name:** `{os.path.basename(file_path)}`\n"
-            f"{bar}\n"
-            f"**Done:** {humanbytes(current)} / {humanbytes(total)}\n"
-            f"**Speed:** {humanbytes(speed)}/s\n"
-            f"**ETA:** {time_formatter(eta)}"
-        )
-        # Update global WebApp tracker
-        percent = (current / total * 100) if total else 0
+        done = current
+        percent = (done / total * 100) if total else 0
+        
+        # 1. Update global WebApp tracker FREQUENTLY (every update)
         WEBAPP_PROGRESS[chat_id] = {
             "action": "Uploading to Telegram...",
-            "current": humanbytes(current),
+            "current": humanbytes(done),
             "total": humanbytes(total) if total else "Unknown",
             "speed": f"{humanbytes(speed)}/s" if speed else "",
             "percentage": round(percent, 1)
         }
+
+        # 2. Update Telegram message INFREQUENTLY (every 1s)
+        now = time.time()
+        if now - last_edit[0] < PROGRESS_UPDATE_DELAY:
+            return
+            
+        bar = progress_bar(done, total)
+        text = (
+            "📤 **Uploading…**\n\n"
+            f"📁 **Name:** `{os.path.basename(file_path)}`\n"
+            f"{bar}\n"
+            f"**Done:** {humanbytes(done)} / {humanbytes(total)}\n"
+            f"**Speed:** {humanbytes(speed)}/s\n"
+            f"**ETA:** {time_formatter(eta)}"
+        )
         try:
             await progress_msg.edit_text(text, reply_markup=cancel_button(chat_id))
         except Exception:
