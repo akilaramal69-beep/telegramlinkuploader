@@ -359,11 +359,7 @@ async def fetch_ytdlp_formats(url: str) -> dict:
                 "nocheckcertificate": True, # Ignore SSL artifacts
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             }
-            # Impersonate browser TLS fingerprint if supported by local yt-dlp version
-            try:
-                opts["impersonate"] = "chrome"
-            except Exception:
-                pass
+
 
             if Config.COOKIES_FILE and os.path.exists(Config.COOKIES_FILE):
                 opts["cookiefile"] = Config.COOKIES_FILE
@@ -583,11 +579,7 @@ async def download_ytdlp(
         },
         "buffersize": 1048576,               # 1MB Buffer
     }
-    # Impersonate browser TLS fingerprint if supported
-    try:
-        ydl_opts["impersonate"] = "chrome"
-    except Exception:
-        pass
+
 
     # Set ffmpeg_location to the DIRECTORY, not the binary path
     ffmpeg_dir = _get_ffmpeg_dir()
