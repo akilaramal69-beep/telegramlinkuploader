@@ -599,10 +599,41 @@ async def download_ytdlp(
         ydl_opts["socket_timeout"] = 30
         ydl_opts["extractor_args"] = {'pornhub': {'prefer_formats': 'mp4'}}
 
-    def _run() -> str:
+    async def _run_async() -> str:
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
+                # 1. Extract metadata only
+                info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
+                
+                # Use safe_stem to build path (we prefer the user's filename)
+                ext = info.get("ext", "mp4")
+                target_path = os.path.join(out_dir, f"{safe_stem}.{ext}")
+                
+                # 2. Identify if handover to aria2c is possible (single direct file)
+                # If requested_formats is missing or only has 1 format, it's usually a single file.
+                req_formats = info.get("requested_formats")
+                is_single = not req_formats or len(req_formats) == 1
+                
+                # Check protocol — avoid aria2 for complex streams (DASH/HLS) that yt-dlp handles better natively
+                protocol = info.get("protocol", "")
+                is_direct = "http" in protocol and "m3u8" not in protocol and "dash" not in protocol
+
+                if is_single and is_direct:
+                    Config.LOGGER.info(f"Handing off direct URL to aria2c for max speed: {url}")
+                    # Forward headers (User-Agent, Cookie, Referer)
+                    headers = info.get("http_headers", {})
+                    # Ensure cookies from the cookiefile are included if provided by yt-dlp
+                    return await _download_aria2c(
+                        info["url"], target_path, progress_msg, start_time_ref, user_id, 
+                        cancel_ref=cancel_ref, 
+                        headers=headers
+                    )
+                
+                # 3. Fallback: Use yt-dlp native downloader (with progress hooks)
+                # This handles merging (video+audio) and fragmented streams (HLS/DASH)
+                Config.LOGGER.info(f"Using native yt-dlp downloader for complex stream/merge: {url}")
+                await loop.run_in_executor(None, lambda: ydl.process_info(info))
+                
                 # Merged mp4 is the most likely output
                 mp4_path = os.path.join(out_dir, f"{safe_stem}.mp4")
                 if os.path.exists(mp4_path):
@@ -617,10 +648,12 @@ async def download_ytdlp(
                     return os.path.join(out_dir, candidates[0])
                 raise FileNotFoundError("Error: output file not found after download")
         except Exception as e:
-            Config.LOGGER.error(f"yt-dlp critical error for {url}: {e}")
+            if isinstance(e, asyncio.CancelledError):
+                raise
+            Config.LOGGER.error(f"yt-dlp/aria2c critical error for {url}: {e}")
             raise
 
-    file_path = await loop.run_in_executor(None, _run)
+    file_path = await _run_async()
     mime = mimetypes.guess_type(file_path)[0] or "video/mp4"
     return file_path, mime
 
@@ -1081,7 +1114,7 @@ aria2 = aria2p.API(
     )
 )
 
-async def _download_aria2c(url: str, out_path: str, progress_msg, start_time_ref: list, user_id: int, cancel_ref: list = None) -> str:
+async def _download_aria2c(url: str, out_path: str, progress_msg, start_time_ref: list, user_id: int, cancel_ref: list = None, headers: dict = None) -> str:
     """
     Download extremely fast using aria2c native RPC daemon.
     Uses 16 concurrent HTTP streams and no file allocation for Koyeb disk stability.
@@ -1103,6 +1136,16 @@ async def _download_aria2c(url: str, out_path: str, progress_msg, start_time_ref
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "header": ["Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"]
     }
+    
+    # Merge custom headers (e.g. Cookies, Referer from yt-dlp)
+    if headers:
+        if "header" not in options:
+            options["header"] = []
+        for k, v in headers.items():
+            # aria2 expects "Name: Value" strings in the header list
+            options["header"].append(f"{k}: {v}")
+        if "User-Agent" in headers:
+            options["user-agent"] = headers["User-Agent"]
 
     # Add the download to the daemon
     download = await asyncio.to_thread(aria2.add_uris, [url], options)
