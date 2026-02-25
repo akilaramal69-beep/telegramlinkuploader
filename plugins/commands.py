@@ -206,6 +206,7 @@ async def _do_upload_logic(
         await upload_file(
             client, reply_to.chat.id, file_path, mime,
             caption, thumb_file_id, status_msg, start_time,
+            user_id=user_id,
             force_document=force_document,
             cancel_ref=cancel_ref,
         )

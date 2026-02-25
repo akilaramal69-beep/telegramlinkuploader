@@ -1226,6 +1226,7 @@ async def upload_file(
     thumb_file_id: str | None,
     progress_msg,
     start_time_ref: list,
+    user_id: int,              # Explicit user_id for WEBAPP_PROGRESS tracking
     force_document: bool = False,
     cancel_ref: list = None,
 ):
@@ -1244,11 +1245,15 @@ async def upload_file(
         if cancel_ref and cancel_ref[0]:
             raise asyncio.CancelledError("Upload cancelled.")
             
+        now = time.time()
         done = current
         percent = (done / total * 100) if total else 0
+        elapsed = now - start_time_ref[0]
+        speed = done / elapsed if elapsed else 0
+        eta = (total - done) / speed if speed else 0
         
-        # 1. Update global WebApp tracker FREQUENTLY (every update)
-        WEBAPP_PROGRESS[chat_id] = {
+        # 1. Update global WebApp tracker FREQUENTLY
+        WEBAPP_PROGRESS[user_id] = {
             "action": "Uploading to Telegram...",
             "current": humanbytes(done),
             "total": humanbytes(total) if total else "Unknown",
@@ -1256,8 +1261,7 @@ async def upload_file(
             "percentage": round(percent, 1)
         }
 
-        # 2. Update Telegram message INFREQUENTLY (every 1s)
-        now = time.time()
+        # 2. Update Telegram message INFREQUENTLY
         if now - last_edit[0] < PROGRESS_UPDATE_DELAY:
             return
             
@@ -1290,26 +1294,32 @@ async def upload_file(
             pass
         meta = await get_video_metadata(file_path)
 
+    # Truncate caption to Telegram limit (1024)
+    if caption and len(caption) > 1000:
+        caption = caption[:997] + "..."
+
     # ── 2. Resolve thumbnail ───────────────────────────────────────────────────
+    # Use a unique thumb name to avoid conflicts during concurrent uploads
+    thumb_suffix = abs(hash(file_path)) % 10000
     thumb_local = None
 
     if thumb_file_id:
-        # User has a saved thumbnail — download it from Telegram
         try:
             thumb_local = await client.download_media(
                 thumb_file_id,
-                file_name=os.path.join(Config.DOWNLOAD_LOCATION, f"thumb_user_{chat_id}.jpg"),
+                file_name=os.path.join(Config.DOWNLOAD_LOCATION, f"thumb_user_{chat_id}_{thumb_suffix}.jpg"),
             )
         except Exception:
             thumb_local = None
 
     if not thumb_local and is_video:
-        # No custom thumb → auto-generate from video frame quickly at 0s mark
         try:
             await progress_msg.edit_text("🖼️ Generating fast thumbnail…", reply_markup=cancel_button(chat_id))
         except Exception:
             pass
-        thumb_local = await generate_video_thumbnail(file_path, chat_id, meta["duration"])
+        # Ensure duration is at least 1s for better thumbnail compatibility
+        v_duration = max(1, meta["duration"])
+        thumb_local = await generate_video_thumbnail(file_path, f"{chat_id}_{thumb_suffix}", v_duration)
 
     # ── 3. Build kwargs (chat_id and file passed as positional args) ───────────
     kwargs = dict(
@@ -1322,27 +1332,37 @@ async def upload_file(
 
     # ── 4. Send to Telegram ───────────────────────────────────────────────────
     try:
+        # Final safety checks for metadata types
+        v_duration = int(meta.get("duration", 0))
+        v_width = int(meta.get("width", 0))
+        v_height = int(meta.get("height", 0))
+
         if force_document:
             await client.send_document(chat_id, file_path, **kwargs)
         elif is_video:
             await client.send_video(
                 chat_id,
                 file_path,
-                duration=meta["duration"],
-                width=meta["width"],
-                height=meta["height"],
+                duration=v_duration,
+                width=v_width,
+                height=v_height,
                 supports_streaming=True,
                 **kwargs,
             )
         elif is_audio:
             await client.send_audio(chat_id, file_path, **kwargs)
         elif is_image:
-            img_kwargs = dict(caption=caption, parse_mode=None, progress=_progress)
+            img_kwargs = dict(caption=caption, progress=_progress)
             if thumb_local:
                 img_kwargs["thumb"] = thumb_local
             await client.send_photo(chat_id, file_path, **img_kwargs)
         else:
             await client.send_document(chat_id, file_path, **kwargs)
+    except Exception as e:
+        Config.LOGGER.error(f"Critical Pyrogram send error for {file_path}: {e}")
+        # Log more info to help debug serialization issues
+        Config.LOGGER.error(f"Metadata: {meta}, Thumb: {thumb_local}, Caption Len: {len(caption) if caption else 0}")
+        raise
     finally:
         # Clean up any temp thumbnail files
         if thumb_local and os.path.exists(thumb_local):
