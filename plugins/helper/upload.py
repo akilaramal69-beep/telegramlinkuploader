@@ -276,23 +276,22 @@ async def fetch_http_filename(url: str, default_name: str = "downloaded_file") -
         ) as head:
             mime = head.headers.get("Content-Type", "").split(";")[0].strip()
             cd = head.headers.get("Content-Disposition", "")
-                
-                # Check server-provided exact filename
-                cd_match = re.search(r'filename="?([^"]+)"?', cd)
-                if cd_match:
-                    return smart_output_name(cd_match.group(1))
+            # Check server-provided exact filename
+            cd_match = re.search(r'filename="?([^"]+)"?', cd)
+            if cd_match:
+                return smart_output_name(cd_match.group(1))
 
-                # If no Content-Disposition, check if the parsed URL name lacks an extension
-                parsed_name = urllib.parse.unquote(os.path.basename(urllib.parse.urlparse(url).path.rstrip("/")))
-                base_name = parsed_name if parsed_name else default_name
-                
-                if not os.path.splitext(base_name)[1]:
-                    ext = mimetypes.guess_extension(mime)
-                    if ext:
-                        if ext == '.jpe': ext = '.jpg'
-                        base_name += ext
-                        
-                return smart_output_name(base_name)
+            # If no Content-Disposition, check if the parsed URL name lacks an extension
+            parsed_name = urllib.parse.unquote(os.path.basename(urllib.parse.urlparse(url).path.rstrip("/")))
+            base_name = parsed_name if parsed_name else default_name
+            
+            if not os.path.splitext(base_name)[1]:
+                ext = mimetypes.guess_extension(mime)
+                if ext:
+                    if ext == '.jpe': ext = '.jpg'
+                    base_name += ext
+                    
+            return smart_output_name(base_name)
     except Exception:
         # Fallback to standard URL parsing
         parsed = urllib.parse.urlparse(url)
