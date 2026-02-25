@@ -356,8 +356,15 @@ async def fetch_ytdlp_formats(url: str) -> dict:
                 "quiet": True,
                 "no_warnings": True,
                 "force_ipv4": True,
+                "nocheckcertificate": True, # Ignore SSL artifacts
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             }
+            # Impersonate browser TLS fingerprint if supported by local yt-dlp version
+            try:
+                opts["impersonate"] = "chrome"
+            except Exception:
+                pass
+
             if Config.COOKIES_FILE and os.path.exists(Config.COOKIES_FILE):
                 opts["cookiefile"] = Config.COOKIES_FILE
             if Config.PROXY:
@@ -368,6 +375,7 @@ async def fetch_ytdlp_formats(url: str) -> dict:
                 opts["referer"] = "https://www.pornhub.com/"
                 opts["geo_bypass"] = True
                 opts["socket_timeout"] = 20
+                opts["extractor_args"] = {'pornhub': {'prefer_formats': 'mp4'}}
 
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -485,6 +493,8 @@ async def download_ytdlp(
     # Build a safe output stem from the user-chosen filename
     # Shorten to 80 chars to avoid OS length limits (e.g. for long Facebook titles)
     safe_stem = re.sub(r'[\\/*?"<>|:]', "_", os.path.splitext(filename)[0])[:80]
+    if not safe_stem:
+        safe_stem = "video_file"
     outtmpl = os.path.join(out_dir, f"{safe_stem}.%(ext)s")
 
     def _progress_hook(d: dict):
@@ -559,6 +569,7 @@ async def download_ytdlp(
         "quiet": True,
         "no_warnings": True,
         "force_ipv4": True,
+        "nocheckcertificate": True,
         "merge_output_format": "mp4",
         "overwrites": True,
         "noplaylist": True,
@@ -568,6 +579,11 @@ async def download_ytdlp(
         "hls_prefer_native": True,           # Force python-native HLS to preserve UI progress bars instead of silent ffmpeg delegation
         "http_chunk_size": 10485760,         # 10MB chunked Range-requests for extreme HTTP stability
     }
+    # Impersonate browser TLS fingerprint if supported
+    try:
+        ydl_opts["impersonate"] = "chrome"
+    except Exception:
+        pass
 
     # Set ffmpeg_location to the DIRECTORY, not the binary path
     ffmpeg_dir = _get_ffmpeg_dir()
@@ -587,23 +603,28 @@ async def download_ytdlp(
         ydl_opts["referer"] = "https://www.pornhub.com/"
         ydl_opts["geo_bypass"] = True
         ydl_opts["socket_timeout"] = 30
+        ydl_opts["extractor_args"] = {'pornhub': {'prefer_formats': 'mp4'}}
 
     def _run() -> str:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            # Merged mp4 is the most likely output
-            mp4_path = os.path.join(out_dir, f"{safe_stem}.mp4")
-            if os.path.exists(mp4_path):
-                return mp4_path
-            # Fallback: find any file starting with the safe stem
-            candidates = sorted(
-                [f for f in os.listdir(out_dir) if f.startswith(safe_stem)],
-                key=lambda f: os.path.getsize(os.path.join(out_dir, f)),
-                reverse=True,
-            )
-            if candidates:
-                return os.path.join(out_dir, candidates[0])
-            raise FileNotFoundError("Error: output file not found after download")
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                # Merged mp4 is the most likely output
+                mp4_path = os.path.join(out_dir, f"{safe_stem}.mp4")
+                if os.path.exists(mp4_path):
+                    return mp4_path
+                # Fallback: find any file starting with the safe stem
+                candidates = sorted(
+                    [f for f in os.listdir(out_dir) if f.startswith(safe_stem)],
+                    key=lambda f: os.path.getsize(os.path.join(out_dir, f)),
+                    reverse=True,
+                )
+                if candidates:
+                    return os.path.join(out_dir, candidates[0])
+                raise FileNotFoundError("Error: output file not found after download")
+        except Exception as e:
+            Config.LOGGER.error(f"yt-dlp critical error for {url}: {e}")
+            raise
 
     file_path = await loop.run_in_executor(None, _run)
     mime = mimetypes.guess_type(file_path)[0] or "video/mp4"

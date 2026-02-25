@@ -32,7 +32,7 @@ class Config:
     DATABASE_URL: str = os.environ.get("DATABASE_URL", "")
 
     # ── File handling ─────────────────────────────────
-    DOWNLOAD_LOCATION: str = "./DOWNLOADS"
+    DOWNLOAD_LOCATION: str = os.path.abspath("./DOWNLOADS")
     MAX_FILE_SIZE: int = 2_097_152_000          # ~2 GB (Pyrogram MTProto limit)
     CHUNK_SIZE: int = int(os.environ.get("CHUNK_SIZE", 4096)) * 1024  # KB → bytes (Default: 4MB per chunk for faster HTTP processing)
 
