@@ -380,15 +380,29 @@ async def fetch_ytdlp_formats(url: str) -> dict:
                             available[res] = f
                         else:
                             curr_f = available[res]
-                            # Prioritize pre-mixed streams (with audio codec) OR higher bitrate OR known size
+                            # Prioritize pre-mixed streams (with audio codec)
                             curr_has_audio = curr_f.get("acodec") != "none"
                             new_has_audio = f.get("acodec") != "none"
                             
                             if new_has_audio and not curr_has_audio:
                                 available[res] = f
                             elif new_has_audio == curr_has_audio:
-                                if (f.get("tbr") or 0) > (curr_f.get("tbr") or 0):
+                                # Compare tbr if present
+                                curr_tbr = curr_f.get("tbr") or 0
+                                new_tbr = f.get("tbr") or 0
+                                
+                                if new_tbr > curr_tbr:
                                     available[res] = f
+                                elif new_tbr == curr_tbr:
+                                    # Compare filesize
+                                    curr_size = curr_f.get("filesize") or curr_f.get("filesize_approx") or 0
+                                    new_size = f.get("filesize") or f.get("filesize_approx") or 0
+                                    
+                                    if new_size > curr_size:
+                                        available[res] = f
+                                    elif new_size == curr_size:
+                                        # If both tbr and size are equal or missing (TikTok), trust yt-dlp's default latter-is-better sort
+                                        available[res] = f
                 
                 results = []
                 sorted_res = sorted(
