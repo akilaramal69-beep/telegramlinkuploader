@@ -181,6 +181,9 @@ def is_ytdlp_url(url: str) -> bool:
     """Return True if the URL belongs to a yt-dlp-supported platform dynamically."""
     if not YTDLP_AVAILABLE:
         return False
+    # Explicitly exclude YouTube from yt-dlp path to force Cobalt usage
+    if any(x in url.lower() for x in ["youtube.com", "youtu.be", "youtube-nocookie.com"]):
+        return False
     try:
         host = urllib.parse.urlparse(url).netloc.lower().lstrip("www.")
         # Step 1: Check Hardcoded fallback domains (handles shortened links like `t.co` and `fb.com/share`)
@@ -951,6 +954,13 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
                     ) from ytdlp_err
             else:
                 raise  # re-raise yt-dlp error for non-cobalt URLs
+
+    # Secondary extraction route: Force Cobalt for skipped yt-dlp domains (e.g. YouTube)
+    if is_cobalt_url(url):
+        try:
+            return await download_cobalt(url, filename, progress_msg, start_time_ref, user_id, cancel_ref=cancel_ref)
+        except Exception:
+            pass # fall through to aria2c/http probe if cobalt fails
 
     # Transition state for WebApp
     WEBAPP_PROGRESS[user_id] = {
