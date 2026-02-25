@@ -572,12 +572,10 @@ async def download_ytdlp(
         "max_filesize": Config.MAX_FILE_SIZE,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "concurrent_fragment_downloads": 30, # Max out DASH/HLS fragment speeds
-        "hls_prefer_native": False,          # Use aria2c for fragments if available
-        "external_downloader": "aria2c",     # USE ARIA2 FOR MAX SPEED
-        "external_downloader_args": {
-            "aria2c": ["-x16", "-s16", "-j10", "-k1M", "--file-allocation=none"]
-        },
-        "buffersize": 1048576,               # 1MB Buffer
+        "hls_prefer_native": True,           # Native HLS allows better progress reporting
+        "buffersize": 1048576,               # 1MB Buffer for speed
+        "retries": 10,
+        "fragment_retries": 10,
     }
 
 
