@@ -362,6 +362,12 @@ async def fetch_ytdlp_formats(url: str) -> dict:
                 opts["cookiefile"] = Config.COOKIES_FILE
             if Config.PROXY:
                 opts["proxy"] = Config.PROXY
+            
+            # NSFW / PornHub tweaks
+            if "pornhub.com" in url:
+                opts["referer"] = "https://www.pornhub.com/"
+                opts["geo_bypass"] = True
+                opts["socket_timeout"] = 20
 
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -577,6 +583,10 @@ async def download_ytdlp(
     # Platform specific tweaks
     if "reddit.com" in url or "v.redd.it" in url:
         ydl_opts["referer"] = "https://www.reddit.com/"
+    elif "pornhub.com" in url:
+        ydl_opts["referer"] = "https://www.pornhub.com/"
+        ydl_opts["geo_bypass"] = True
+        ydl_opts["socket_timeout"] = 30
 
     def _run() -> str:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
