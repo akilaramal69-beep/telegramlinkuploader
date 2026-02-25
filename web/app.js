@@ -318,7 +318,7 @@ function startProgressPolling(userId) {
             }
 
             // Check for completion
-            if (data.action === "Complete" || data.percentage >= 100) {
+            if (data.action === "Complete") {
                 clearInterval(pollInterval);
                 progressAction.innerText = "File is ready in your chat! ✅";
                 openTgBtn.classList.remove('hidden');

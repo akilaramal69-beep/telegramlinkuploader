@@ -504,12 +504,18 @@ async def download_ytdlp(
         percent = (done / total * 100) if total else 0
 
         # 1. Update global WebApp tracker FREQUENTLY
+        # Cap at 99.5% to avoid the frontend thinking it's totally finished 
+        # while yt-dlp might still be merging or finishing its internal loops.
+        display_percent = max(1, round(percent, 1))
+        if display_percent >= 100:
+            display_percent = 99.5
+
         WEBAPP_PROGRESS[user_id] = {
             "action": "Downloading Media...",
             "current": humanbytes(done),
             "total": humanbytes(total) if total else "Unknown",
             "speed": f"{humanbytes(speed)}/s" if speed else "",
-            "percentage": max(1, round(percent, 1))
+            "percentage": display_percent
         }
 
         # 2. Update Telegram message INFREQUENTLY
@@ -619,7 +625,15 @@ async def download_ytdlp(
                 
                 # Check protocol — avoid aria2 for complex streams (DASH/HLS) that yt-dlp handles better natively
                 protocol = info.get("protocol", "")
-                is_direct = "http" in protocol and "m3u8" not in protocol and "dash" not in protocol
+                
+                # Do NOT hand off complex social media sites to aria2c. 
+                # They often require specialized cookie logic or dynamic tokens 
+                # that aria2c fails on (downloading a tiny HTML page instead).
+                extractor = info.get("extractor_key", "").lower()
+                tricky_extractors = ["facebook", "instagram", "twitter", "x", "tiktok"]
+                is_tricky = any(t in extractor for t in tricky_extractors)
+                
+                is_direct = "http" in protocol and "m3u8" not in protocol and "dash" not in protocol and not is_tricky
 
                 if is_single and is_direct:
                     Config.LOGGER.info(f"Handing off direct URL to aria2c for max speed: {url}")
@@ -1140,6 +1154,10 @@ async def _download_aria2c(url: str, out_path: str, progress_msg, start_time_ref
         "header": ["Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"]
     }
     
+    # Inject global cookies directly into aria2c so it can authenticate social media direct links just like yt-dlp
+    if os.path.exists(Config.COOKIES_FILE):
+        options["load-cookies"] = os.path.abspath(Config.COOKIES_FILE)
+
     # Merge custom headers (e.g. Cookies, Referer from yt-dlp)
     if headers:
         if "header" not in options:
@@ -1177,12 +1195,17 @@ async def _download_aria2c(url: str, out_path: str, progress_msg, start_time_ref
             total_str = download.total_length_string()
 
             # 1. Update global WebApp tracker FREQUENTLY (every 200ms)
+            # Cap at 99.5% to avoid jumping to "Complete" before merging/uploading
+            display_pct = pct_int
+            if display_pct >= 100:
+                display_pct = 99.5
+
             WEBAPP_PROGRESS[user_id] = {
                 "action": "Downloading...",
                 "current": current_str,
                 "total": total_str,
                 "speed": speed_str,
-                "percentage": pct_int
+                "percentage": display_pct
             }
 
             # 2. Update Telegram message INFREQUENTLY (every 1s) to avoid flood
@@ -1240,6 +1263,15 @@ async def upload_file(
 
     last_edit = [time.time()]
     start_time_ref[0] = time.time()
+
+    # Immediate update for WebApp to indicate transition to Upload phase
+    WEBAPP_PROGRESS[user_id] = {
+        "action": "Uploading to Telegram...",
+        "current": "0 B",
+        "total": "Calculating...",
+        "speed": "---",
+        "percentage": 0.1
+    }
 
     async def _progress(current: int, total: int):
         if cancel_ref and cancel_ref[0]:
