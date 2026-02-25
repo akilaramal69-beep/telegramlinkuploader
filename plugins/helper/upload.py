@@ -371,38 +371,11 @@ async def fetch_ytdlp_formats(url: str) -> dict:
                         elif fid == "sd":
                             height = 360
                     
-                    # Ignore DASH streams that have no known size from the server if we already have alternatives
-                    size = f.get("filesize") or f.get("filesize_approx")
-                    
                     if height and f.get("vcodec") != "none":
                         res = f"{height}p"
-                        if res not in available:
-                            available[res] = f
-                        else:
-                            curr_f = available[res]
-                            # Prioritize pre-mixed streams (with audio codec)
-                            curr_has_audio = curr_f.get("acodec") != "none"
-                            new_has_audio = f.get("acodec") != "none"
-                            
-                            if new_has_audio and not curr_has_audio:
-                                available[res] = f
-                            elif new_has_audio == curr_has_audio:
-                                # Compare tbr if present
-                                curr_tbr = curr_f.get("tbr") or 0
-                                new_tbr = f.get("tbr") or 0
-                                
-                                if new_tbr > curr_tbr:
-                                    available[res] = f
-                                elif new_tbr == curr_tbr:
-                                    # Compare filesize
-                                    curr_size = curr_f.get("filesize") or curr_f.get("filesize_approx") or 0
-                                    new_size = f.get("filesize") or f.get("filesize_approx") or 0
-                                    
-                                    if new_size > curr_size:
-                                        available[res] = f
-                                    elif new_size == curr_size:
-                                        # If both tbr and size are equal or missing (TikTok), trust yt-dlp's default latter-is-better sort
-                                        available[res] = f
+                        # yt-dlp returns formats sorted from worst to best.
+                        # Overwriting the key guarantees we keep the best format for this resolution
+                        available[res] = f
                 
                 results = []
                 sorted_res = sorted(
