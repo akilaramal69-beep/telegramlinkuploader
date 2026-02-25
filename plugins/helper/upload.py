@@ -81,40 +81,56 @@ async def resolve_url(url: str) -> str:
     """Resolve redirecting URLs (like reddit shortlinks) and bypass Twitter NSFW blocks."""
     # 1. Resolve Reddit short links
     if "redd.it" in url or "/s/" in url.lower():
-        try:
-            session = await get_http_session()
-            async with session.head(url, allow_redirects=True, timeout=10) as resp:
-                url = str(resp.url)
-        except Exception:
-            pass
+        for _ in range(2): # 2 retries
+            try:
+                session = await get_http_session()
+                async with session.head(
+                    url, 
+                    allow_redirects=True, 
+                    timeout=10, 
+                    proxy=Config.PROXY
+                ) as resp:
+                    url = str(resp.url)
+                    break
+            except Exception:
+                await asyncio.sleep(1)
 
     # 2. Extract Twitter direct media URL if it's a tweet link
     if any(domain in url.lower() for domain in ["twitter.com", "x.com", "t.co"]):
         # Resolve t.co first if necessary
         if "t.co" in url.lower():
-            try:
-                session = await get_http_session()
-                async with session.head(url, allow_redirects=True, timeout=10) as resp:
-                    url = str(resp.url)
-            except Exception:
-                pass
+            for _ in range(2):
+                try:
+                    session = await get_http_session()
+                    async with session.head(
+                        url, 
+                        allow_redirects=True, 
+                        timeout=10, 
+                        proxy=Config.PROXY
+                    ) as resp:
+                        url = str(resp.url)
+                        break
+                except Exception:
+                    await asyncio.sleep(1)
                 
         # Now Check for twitter.com / x.com and try vxtwitter API
         match = re.search(r'(?:twitter\.com|x\.com)/(?:[^/]+/status/|status/|status/|/)([0-9]+)', url, re.IGNORECASE)
         if match:
             tweet_id = match.group(1)
             api_url = f"https://api.vxtwitter.com/x/status/{tweet_id}"
-            try:
-                session = await get_http_session()
-                async with session.get(api_url, timeout=10) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        media_urls = data.get("mediaURLs", [])
-                        if media_urls:
-                            # We return the direct raw video/image URL instead of the twitter page!
-                            return media_urls[0]
-            except Exception:
-                pass
+            for _ in range(2):
+                try:
+                    session = await get_http_session()
+                    async with session.get(api_url, timeout=10, proxy=Config.PROXY) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            media_urls = data.get("mediaURLs", [])
+                            if media_urls:
+                                # We return the direct raw video/image URL instead of the twitter page!
+                                return media_urls[0]
+                    break
+                except Exception:
+                    await asyncio.sleep(1)
 
     return url
 
@@ -237,6 +253,7 @@ async def fetch_ytdlp_title(url: str) -> str | None:
                 "quiet": True,
                 "no_warnings": True,
                 "skip_download": True,
+                "force_ipv4": True, # Common fix for Connection Reset on VPS
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             }
             if Config.COOKIES_FILE and os.path.exists(Config.COOKIES_FILE):
@@ -272,7 +289,8 @@ async def fetch_http_filename(url: str, default_name: str = "downloaded_file") -
         session = await get_http_session()
         async with session.head(
             url, allow_redirects=True,
-            timeout=aiohttp.ClientTimeout(total=10)
+            timeout=aiohttp.ClientTimeout(total=10),
+            proxy=Config.PROXY
         ) as head:
             mime = head.headers.get("Content-Type", "").split(";")[0].strip()
             cd = head.headers.get("Content-Disposition", "")
@@ -337,6 +355,7 @@ async def fetch_ytdlp_formats(url: str) -> dict:
             opts = {
                 "quiet": True,
                 "no_warnings": True,
+                "force_ipv4": True,
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             }
             if Config.COOKIES_FILE and os.path.exists(Config.COOKIES_FILE):
@@ -533,6 +552,7 @@ async def download_ytdlp(
         "progress_hooks": [_progress_hook],
         "quiet": True,
         "no_warnings": True,
+        "force_ipv4": True,
         "merge_output_format": "mp4",
         "overwrites": True,
         "noplaylist": True,
@@ -636,6 +656,7 @@ async def download_cobalt(
             json=payload,
             headers=headers,
             timeout=aiohttp.ClientTimeout(total=30),
+            proxy=Config.PROXY
         ) as resp:
             if resp.status != 200:
                 error_text = await resp.text()
@@ -960,7 +981,8 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
     session = await get_http_session()
     async with session.head(
         url, allow_redirects=True,
-        timeout=aiohttp.ClientTimeout(total=30)
+        timeout=aiohttp.ClientTimeout(total=30),
+        proxy=Config.PROXY
     ) as head:
         mime = head.headers.get("Content-Type", "").split(";")[0].strip()
         total_str = head.headers.get("Content-Length", "0")

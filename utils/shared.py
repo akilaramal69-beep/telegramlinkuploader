@@ -27,14 +27,17 @@ HTTP_SESSION = None
 async def get_http_session():
     global HTTP_SESSION
     if HTTP_SESSION is None or HTTP_SESSION.closed:
-        connector = asyncio.get_event_loop().create_task(
-            # Large connection pool for serving thousands of users
-            asyncio.to_thread(lambda: asyncio.run(asyncio.sleep(0))) # ensure loop is ready
-        )
         import aiohttp
-        # Limit to 100 connections per host, 1000 total
-        connector = aiohttp.TCPConnector(limit=1000, limit_per_host=100)
-        HTTP_SESSION = aiohttp.ClientSession(connector=connector)
+        # Balanced limits: 500 total, 50 per host to prevent server bans
+        connector = aiohttp.TCPConnector(
+            limit=500, 
+            limit_per_host=50,
+            force_close=False, # Reuse connections
+            enable_cleanup_closed=True
+        )
+        # Use a longer timeout for the session itself to handle slow probes
+        timeout = aiohttp.ClientTimeout(total=60, connect=10, sock_read=30)
+        HTTP_SESSION = aiohttp.ClientSession(connector=connector, timeout=timeout)
     return HTTP_SESSION
 
 async def close_http_session():
