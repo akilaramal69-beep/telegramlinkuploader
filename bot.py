@@ -1,13 +1,22 @@
 import os
 import sys
 import threading
+import asyncio
 from plugins.config import Config
-from pyrogram import Client, idle
+from pyrogram import Client, idle, filters
+import app  # noqa: F401
 
+from utils.shared import bot_client, WEBAPP_PROGRESS
+
+# Register a global ping handler for diagnostics
+@bot_client.on_message(filters.command("ping") & filters.private)
+async def ping_handler(client, message):
+    print(f"📥 Received /ping from {message.from_user.id} at {time.time()}")
+    await message.reply_text("🏓 Pong! Bot is alive and well.")
 
 def run_health_server():
-    import app  # noqa: F401 – registers routes
     from app import app as flask_app
+    print("🌍 Starting Flask server...")
     flask_app.run(host="0.0.0.0", port=8080, use_reloader=False)
 
 
@@ -44,32 +53,39 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"❌ Failed to write cookies file: {e}")
 
+    # Start aria2c daemon
+    import subprocess
+    print("🚀 Starting aria2c RPC daemon...")
+    try:
+        subprocess.Popen(["aria2c", "--enable-rpc", "--rpc-listen-all=true", "--rpc-allow-origin-all=true", "-D"])
+        print("✅ aria2c daemon started.")
+    except Exception as e:
+        print(f"⚠️ Failed to start aria2c daemon: {e}")
+
     # Start Flask health server in background thread (required by Koyeb)
     # Health check returns 503 until bot is fully connected (see app.py)
     health_thread = threading.Thread(target=run_health_server, daemon=True)
     health_thread.start()
     print("🌐 Health server started on port 8080 (returning 503 until bot is ready)")
 
-    # ── Build bot ────────────────────────────────────────────────────────
-    plugins = dict(root="plugins")
-    bot = Client(
-        Config.SESSION_NAME,
-        bot_token=Config.BOT_TOKEN,
-        api_id=Config.API_ID,
-        api_hash=Config.API_HASH,
-        plugins=plugins,
-        sleep_threshold=300,
-        workers=8,
-        upload_boost=True,
-        max_concurrent_transmissions=5,
-    )
-
     # ── Lifecycle: start → mark healthy → idle → shutdown ────────────────
     async def main():
-        from app import app as flask_app
+        print("🔧 Initializing main coroutine...")
+        # Try to connect and verify identity
+        print("🔗 Connecting bot client...")
+        await bot_client.start()
+        print("✅ Bot client started.")
+        
+        try:
+            me = await bot_client.get_me()
+            print(f"✅ Logged in as: @{me.username}")
+        except Exception as e:
+            print(f"⚠️ Could not get bot info: {e}")
 
-        await bot.start()
-        print("✅ Bot connected to Telegram")
+        # Capture the active asyncio loop so Flask threads can dispatch tasks to it
+        print("🌀 Capturing event loop...")
+        from app import app as flask_app
+        flask_app.bot_loop = asyncio.get_running_loop()
 
         # Mark health check as ready — Koyeb now routes traffic here
         flask_app.is_ready = True
@@ -79,12 +95,15 @@ if __name__ == "__main__":
         await idle()
 
         # Signal received — mark as shutting down
-        print("⚠️  Shutdown signal received — stopping bot…")
-        flask_app.is_ready = False
-        flask_app.is_shutting_down = True
+        print("👋 Bot stopping cleanly. Goodbye!")
+        await bot_client.stop()
 
-        await bot.stop()
-        print("👋 Bot stopped cleanly. Goodbye!")
-
-    # bot.run() uses Pyrogram's own event loop management
-    bot.run(main())
+    # Run everything manually since we want more control over start/stop
+    print("🎬 Starting event loop...")
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(main())
+    except Exception as e:
+        print(f"❌ Bot crashed: {e}")
+        import traceback
+        traceback.print_exc()

@@ -8,11 +8,12 @@ import aiohttp
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from plugins.config import Config
+from utils.shared import bot_client, WEBAPP_PROGRESS
 from plugins.helper.database import add_user, get_user, update_user, is_banned
 from plugins.helper.upload import (
     download_url, upload_file, humanbytes,
     smart_output_name, is_ytdlp_url, fetch_ytdlp_title,
-    fetch_ytdlp_formats,
+    fetch_ytdlp_formats, get_best_filename, resolve_url
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -164,12 +165,33 @@ async def _do_upload_logic(
     force_document: bool = False,
     format_id: str = None,
 ):
-    status_msg = await reply_to.reply_text(
-        f"📥 Starting download…\n`{filename}`", quote=True
-    )
+    # status_msg already exists as the 'reply_to' message from trigger_webapp_download
+    status_msg = reply_to
+    
+    # Heartbeat Step 2: Preparing status message
+    WEBAPP_PROGRESS[user_id] = {
+        "action": "Preparing Bot Context...",
+        "percentage": 5,
+        "current": "0 B",
+        "total": "Unknown",
+        "speed": "---"
+    }
+    Config.LOGGER.info(f"_do_upload_logic starting for {user_id}. SyncID={id(WEBAPP_PROGRESS)}")
+    
+    # Heartbeat Step 3: Entering Engine
+    WEBAPP_PROGRESS[user_id] = {
+        "action": "Handing off to Engine...",
+        "percentage": 4,
+        "current": "0 B",
+        "total": "Unknown",
+        "speed": "---"
+    }
+    Config.LOGGER.info(f"_do_upload_logic heartbeat 2/3 for {user_id}")
+
     start_time = [time.time()]
     file_path = None
     try:
+        Config.LOGGER.info(f"calling download_url for {user_id}")
         file_path, mime = await download_url(url, filename, status_msg, start_time, user_id, format_id=format_id, cancel_ref=cancel_ref)
         file_size = os.path.getsize(file_path)
 
@@ -188,6 +210,13 @@ async def _do_upload_logic(
             cancel_ref=cancel_ref,
         )
         await status_msg.edit_text("✅ Upload complete!")
+        
+        # Signal the WebApp that the file is ready in chat
+        WEBAPP_PROGRESS[user_id] = {
+            "action": "Complete",
+            "percentage": 100,
+            "url": "tg://resolve?domain=linktotelebot" 
+        }
 
         # ── Log ────────────────────────────────────────────────────────────
         if Config.LOG_CHANNEL:
@@ -213,9 +242,17 @@ async def _do_upload_logic(
             pass
     except ValueError as e:
         await status_msg.edit_text(f"❌ {e}")
+        WEBAPP_PROGRESS[user_id] = {
+            "action": f"Error: {e}",
+            "percentage": 0
+        }
     except Exception as e:
         Config.LOGGER.exception("Upload error")
         await status_msg.edit_text(f"❌ Error: `{e}`")
+        WEBAPP_PROGRESS[user_id] = {
+            "action": f"Error: {e}",
+            "percentage": 0
+        }
     finally:
         if file_path and os.path.exists(file_path):
             try:
@@ -243,7 +280,8 @@ async def resolve_rename(
             pass
         
         # Only shows quality selector if there are AT LEAST 2 distinct resolutions to choose from
-        formats = await fetch_ytdlp_formats(url)
+        res = await fetch_ytdlp_formats(url)
+        formats = res.get("formats")
         if formats:
             PENDING_FORMATS[user_id] = {"url": url, "filename": filename}
             try:
@@ -271,17 +309,37 @@ async def start_handler(client: Client, message: Message):
     if await is_banned(user.id):
         return await message.reply_text("🚫 You are banned from using this bot.")
 
+    from pyrogram.types import WebAppInfo
+    app_url = "https://swift-vilhelmina-akila-10dce4a8.koyeb.app" # The hosted URL of our Flask server
+    
     buttons = []
+    # Add the primary Mini App Launch Button
+    buttons.append([InlineKeyboardButton("📱 Open Web Interface 📱", web_app=WebAppInfo(url=app_url))])
+    
     if Config.UPDATES_CHANNEL:
         buttons.append([InlineKeyboardButton("📢 Updates", url=f"https://t.me/{Config.UPDATES_CHANNEL}")])
     buttons.append([InlineKeyboardButton("❓ Help", callback_data="help"),
                     InlineKeyboardButton("ℹ️ About", callback_data="about")])
     kb = InlineKeyboardMarkup(buttons)
-    await message.reply_text(
+    
+    welcome_text = (
         f"👋 Hello **{user.first_name}**!\n\n"
         "I can upload files up to **2 GB** to Telegram from any direct URL.\n\n"
-        "📤 Send a URL or use `/upload <url>` to get started!\n"
-        "✏️ I'll ask you to rename and choose upload mode before uploading.",
+    )
+    
+    if not Config.ALLOW_BOT_URL_UPLOAD and user.id != Config.OWNER_ID and user.id not in Config.ADMIN:
+        welcome_text += (
+            "⚠️ **Direct bot uploads are currently disabled for users.**\n"
+            "Please use the **Web Interface** button below to submit your links!"
+        )
+    else:
+        welcome_text += (
+            "📱 **Click the big Web Interface button below to try the new Mini App!**\n"
+            "(You can also send a URL or use `/upload <url>` normally without it)."
+        )
+
+    await message.reply_text(
+        welcome_text,
         reply_markup=kb,
         quote=True,
     )
@@ -440,6 +498,19 @@ async def upload_handler(client: Client, message: Message):
         return await message.reply_text("🚫 You are banned.")
 
     args = message.command
+    
+    # Check if bot upload is allowed or user is admin
+    if not Config.ALLOW_BOT_URL_UPLOAD and user.id != Config.OWNER_ID and user.id not in Config.ADMIN:
+        from pyrogram.types import WebAppInfo
+        app_url = "https://swift-vilhelmina-akila-10dce4a8.koyeb.app"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📱 Open Web Interface 📱", web_app=WebAppInfo(url=app_url))]])
+        return await message.reply_text(
+            "⚠️ **Direct bot uploads are currently disabled.**\n\n"
+            "Please use the **Web Interface** below to submit your links. It's faster and supports more features!",
+            reply_markup=kb,
+            quote=True
+        )
+
     url = None
     if len(args) > 1:
         url = args[1].strip()
@@ -452,9 +523,18 @@ async def upload_handler(client: Client, message: Message):
             quote=True,
         )
 
+    status_info = await message.reply_text("🔍 Analyzing file info…", quote=True)
+    try:
+        url = await resolve_url(url)
+    except Exception:
+        pass
+
     # For yt-dlp URLs, fetch the video title to use as suggested filename
     if is_ytdlp_url(url):
-        status_info = await message.reply_text("🔍 Fetching video info…", quote=True)
+        try:
+            await status_info.edit_text("🔍 Fetching video info…")
+        except Exception:
+            pass
         fetched = await fetch_ytdlp_title(url)
         try:
             await status_info.delete()
@@ -463,6 +543,10 @@ async def upload_handler(client: Client, message: Message):
         orig_filename = fetched or smart_output_name(extract_filename(url))
     else:
         orig_filename = smart_output_name(extract_filename(url))
+        try:
+            await status_info.delete()
+        except Exception:
+            pass
     PENDING_RENAMES[user.id] = {"url": url, "orig": orig_filename}
 
     kb = InlineKeyboardMarkup([
@@ -527,17 +611,32 @@ async def text_handler(client: Client, message: Message):
         await add_user(user.id, user.username)
         if await is_banned(user.id):
             return await message.reply_text("🚫 You are banned.")
-        # For yt-dlp URLs, fetch video title as suggested filename
-        if is_ytdlp_url(text):
-            status_info = await message.reply_text("🔍 Fetching video info…", quote=True)
-            fetched = await fetch_ytdlp_title(text)
-            try:
-                await status_info.delete()
-            except Exception:
-                pass
-            orig_filename = fetched or smart_output_name(extract_filename(text))
-        else:
-            orig_filename = smart_output_name(extract_filename(text))
+        
+        # Check if bot upload is allowed or user is admin
+        if not Config.ALLOW_BOT_URL_UPLOAD and user.id != Config.OWNER_ID and user.id not in Config.ADMIN:
+            from pyrogram.types import WebAppInfo
+            app_url = "https://swift-vilhelmina-akila-10dce4a8.koyeb.app"
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("📱 Open Web Interface 📱", web_app=WebAppInfo(url=app_url))]])
+            return await message.reply_text(
+                "⚠️ **Direct bot uploads are currently disabled.**\n\n"
+                "Please use the **Web Interface** below to submit your links. It's faster and supports more features!",
+                reply_markup=kb,
+                quote=True
+            )
+
+        # Pre-flight check: Extract the real extension via HTTP Sniffing or yt-dlp first!
+        status_info = await message.reply_text("🔍 Analyzing file info…", quote=True)
+        try:
+            text = await resolve_url(text)
+        except Exception:
+            pass
+        
+        orig_filename = await get_best_filename(text)
+        try:
+            await status_info.delete()
+        except Exception:
+            pass
+            
         PENDING_RENAMES[user.id] = {"url": text, "orig": orig_filename}
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("⏭ Skip (keep original)", callback_data=f"skip_rename:{user.id}")]
@@ -615,3 +714,59 @@ async def show_thumb(client: Client, message: Message):
 async def del_thumb(client: Client, message: Message):
     await update_user(message.from_user.id, {"thumb": None})
     await message.reply_text("✅ Thumbnail deleted.", quote=True)
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  WebApp Bridge Logic (Called by Flask)
+# ─────────────────────────────────────────────────────────────────────────────
+
+async def trigger_webapp_download(chat_id: int, url: str, format_id: str, mode: str, filename: str = None):
+    """
+    Called by Flask route `/api/download` to push a task directly into the bot queue.
+    Because Flask handles the request synchronously, it fires this onto the main event loop.
+    """
+    # Initialize progress entry immediately so UI doesn't show "idle"
+    WEBAPP_PROGRESS[chat_id] = {
+        "action": "Initializing download...",
+        "percentage": 1,
+        "current": "0 B",
+        "total": "Unknown",
+        "speed": "---"
+    }
+    Config.LOGGER.info(f"Task queued for {chat_id}. SyncID={id(WEBAPP_PROGRESS)}")
+    
+    # We must quickly send an "Uploading..." stub to the user using the Pyrogram app
+    status_msg = await bot_client.send_message(
+        chat_id=chat_id,
+        text=f"📥 **Web App Request Received:**\n`{url}`\n\n_Preparing download..._"
+    )
+    
+    try:
+        url = await resolve_url(url)
+    except Exception:
+        pass
+        
+    # Use provided filename or extract from URL
+    if not filename:
+        filename = extract_filename(url)
+    filename = smart_output_name(filename)
+    
+    # Ensure it's not empty after sanitize
+    if not filename or filename == ".":
+        filename = "downloaded_file.bin"
+    
+    # Offload the heavy work onto `do_upload` logic
+    # The mode string comes across as 'media' or 'doc'
+    force_document = (mode == "doc")
+    
+    # Fire and forget onto the active loop
+    asyncio.create_task(
+        do_upload(
+            bot_client,
+            status_msg,  # Use the status_msg itself as the "reply_to" context
+            chat_id,
+            url,
+            filename,
+            force_document=force_document,
+            format_id=format_id
+        )
+    )

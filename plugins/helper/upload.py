@@ -10,9 +10,15 @@ import aiohttp
 import aiofiles
 from pyrogram import Client
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import aria2p
 from plugins.config import Config
+from utils.shared import WEBAPP_PROGRESS
 
-PROGRESS_UPDATE_DELAY = 5  # seconds between progress edits
+PROGRESS_UPDATE_DELAY = 1  # seconds between progress edits
+
+# Global dictionary used by the Flask Mini App to read live progress percentages
+# Replaced by Config.WEBAPP_PROGRESS for thread-safe singleton access
+
 
 
 def _get_ffmpeg_bin() -> str:
@@ -71,6 +77,47 @@ def needs_ffmpeg_download(url: str, mime: str) -> bool:
     ext = os.path.splitext(urllib.parse.urlparse(url).path)[1].lower()
     return ext in STREAMING_EXTENSIONS or (mime or "").lower() in HLS_MIME_TYPES
 
+async def resolve_url(url: str) -> str:
+    """Resolve redirecting URLs (like reddit shortlinks) and bypass Twitter NSFW blocks."""
+    # 1. Resolve Reddit short links
+    if "redd.it" in url or "/s/" in url.lower():
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.head(url, allow_redirects=True, timeout=10) as resp:
+                    url = str(resp.url)
+        except Exception:
+            pass
+
+    # 2. Extract Twitter direct media URL if it's a tweet link
+    if any(domain in url.lower() for domain in ["twitter.com", "x.com", "t.co"]):
+        # Resolve t.co first if necessary
+        if "t.co" in url.lower():
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.head(url, allow_redirects=True, timeout=10) as resp:
+                        url = str(resp.url)
+            except Exception:
+                pass
+                
+        # Now Check for twitter.com / x.com and try vxtwitter API
+        match = re.search(r'(?:twitter\.com|x\.com)/(?:[^/]+/status/|status/|status/|/)([0-9]+)', url, re.IGNORECASE)
+        if match:
+            tweet_id = match.group(1)
+            api_url = f"https://api.vxtwitter.com/x/status/{tweet_id}"
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(api_url, timeout=10) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            media_urls = data.get("mediaURLs", [])
+                            if media_urls:
+                                # We return the direct raw video/image URL instead of the twitter page!
+                                return media_urls[0]
+            except Exception:
+                pass
+
+    return url
+
 
 def smart_output_name(filename: str) -> str:
     """
@@ -88,7 +135,21 @@ try:
 except ImportError:
     YTDLP_AVAILABLE = False
 
-# Domains where yt-dlp should be used instead of direct HTTP download
+_YTDLP_EXTRACTORS = None
+
+def _get_ytdlp_extractors():
+    """Lazy-load and cache the yt-dlp extractors (excluding GenericIE fallback)."""
+    global _YTDLP_EXTRACTORS
+    if _YTDLP_EXTRACTORS is None:
+        try:
+            from yt_dlp.extractor import gen_extractors
+            _YTDLP_EXTRACTORS = [e for e in gen_extractors() if e.IE_NAME != 'generic']
+        except Exception as e:
+            Config.LOGGER.error(f"Failed to load yt-dlp extractors: {e}")
+            _YTDLP_EXTRACTORS = []
+    return _YTDLP_EXTRACTORS
+
+# Domains where yt-dlp should be used directly. Additions here bypass dynamic extract checks and Regex strictness.
 YTDLP_DOMAINS = {
     "youtube.com", "youtu.be", "youtube-nocookie.com",
     "instagram.com",
@@ -128,12 +189,17 @@ COBALT_DOMAINS = {
 
 
 def is_ytdlp_url(url: str) -> bool:
-    """Return True if the URL belongs to a yt-dlp-supported platform."""
+    """Return True if the URL belongs to a yt-dlp-supported platform dynamically."""
     if not YTDLP_AVAILABLE:
         return False
     try:
         host = urllib.parse.urlparse(url).netloc.lower().lstrip("www.")
-        return any(host == d or host.endswith("." + d) for d in YTDLP_DOMAINS)
+        # Step 1: Check Hardcoded fallback domains (handles shortened links like `t.co` and `fb.com/share`)
+        if any(host == d or host.endswith("." + d) for d in YTDLP_DOMAINS):
+            return True
+        # Step 2: Dynamically query all yt-dlp extractors natively supported
+        extractors = _get_ytdlp_extractors()
+        return any(e.suitable(url) for e in extractors)
     except Exception:
         return False
 
@@ -190,20 +256,89 @@ async def fetch_ytdlp_title(url: str) -> str | None:
                 info = ydl.extract_info(url, download=False)
                 title = info.get("title") or info.get("id") or "video"
                 title = re.sub(r'[\\/*?"<>|:\n\r\t]', "_", title).strip()
-                return f"{title[:80]}.mp4"
+                ext = info.get("ext") or "mp4"
+                return f"{title[:80]}.{ext}"
         except Exception:
             return None
 
     return await loop.run_in_executor(None, _fetch)
 
 
-async def fetch_ytdlp_formats(url: str) -> list[dict]:
+async def fetch_http_filename(url: str, default_name: str = "downloaded_file") -> str:
+    """
+    Probe a direct URL with a HEAD request to extract the true filename from Content-Disposition
+    or guess the extension from the Content-Type.
+    """
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
+    }
+    try:
+        async with aiohttp.ClientSession(headers=headers) as probe_session:
+            async with probe_session.head(
+                url, allow_redirects=True,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as head:
+                mime = head.headers.get("Content-Type", "").split(";")[0].strip()
+                cd = head.headers.get("Content-Disposition", "")
+                
+                # Check server-provided exact filename
+                cd_match = re.search(r'filename="?([^"]+)"?', cd)
+                if cd_match:
+                    return smart_output_name(cd_match.group(1))
+
+                # If no Content-Disposition, check if the parsed URL name lacks an extension
+                parsed_name = urllib.parse.unquote(os.path.basename(urllib.parse.urlparse(url).path.rstrip("/")))
+                base_name = parsed_name if parsed_name else default_name
+                
+                if not os.path.splitext(base_name)[1]:
+                    ext = mimetypes.guess_extension(mime)
+                    if ext:
+                        if ext == '.jpe': ext = '.jpg'
+                        base_name += ext
+                        
+                return smart_output_name(base_name)
+    except Exception:
+        # Fallback to standard URL parsing
+        parsed = urllib.parse.urlparse(url)
+        name = os.path.basename(parsed.path.rstrip("/"))
+        return smart_output_name(urllib.parse.unquote(name) if name else default_name)
+
+
+async def get_best_filename(url: str, default_name: str = "downloaded_file") -> str:
+    """
+    Universally determine the best filename for any given URL.
+    Routes to yt-dlp native extraction first, falling back to HTTP header sniffing for direct routes.
+    """
+    if is_ytdlp_url(url):
+        ytdlp_title = await fetch_ytdlp_title(url)
+        if ytdlp_title:
+            return ytdlp_title
+        # Even if it's a yt-dlp URL, if the title extraction fails (like on Pinterest), fall back
+    
+    # If it's a cobalt URL, Cobalt handles social media links so HTTP probes usually just return HTML.
+    # So we don't bother probing Cobalt URLs, just return the parsed stem + default .mp4
+    if is_cobalt_url(url):
+        parsed = urllib.parse.urlparse(url)
+        name = os.path.basename(parsed.path.rstrip("/"))
+        base_name = urllib.parse.unquote(name) if name else default_name
+        if not os.path.splitext(base_name)[1]:
+            base_name += ".mp4"
+        return smart_output_name(base_name)
+
+    return await fetch_http_filename(url, default_name)
+
+
+async def fetch_ytdlp_formats(url: str) -> dict:
     """
     Fetch available video formats from yt-dlp.
-    Returns a list of dicts: [{"format_id": str, "resolution": str, "ext": str, "filesize": int}]
+    Returns: {"formats": list[dict], "title": str}
     """
     if not YTDLP_AVAILABLE:
-        return []
+        return {"formats": [], "title": ""}
     loop = asyncio.get_running_loop()
 
     def _fetch():
@@ -221,6 +356,7 @@ async def fetch_ytdlp_formats(url: str) -> list[dict]:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
                 formats = info.get("formats", [])
+                title = info.get("title", "video")
                 
                 # Find the best audio size to add to video-only stream sizes
                 best_audio_size = 0
@@ -230,25 +366,39 @@ async def fetch_ytdlp_formats(url: str) -> list[dict]:
                         if size > best_audio_size:
                             best_audio_size = size
 
-                # Filter for useful formats: usually we want mp4/mkv with video+audio 
-                # or best video and best audio to merge.
+                # Filter for useful formats
                 available = {}
                 for f in formats:
                     height = f.get("height")
-                    # We want formats with video. If no height, we can't label it properly for resolution choice.
+                    
+                    # Facebook Missing Qualities Fix: HD/SD streams have height=None
+                    if height is None:
+                        fid = str(f.get("format_id", "")).lower()
+                        if fid == "hd":
+                            height = 720
+                        elif fid == "sd":
+                            height = 360
+                    
+                    # Ignore DASH streams that have no known size from the server if we already have alternatives
+                    size = f.get("filesize") or f.get("filesize_approx")
+                    
                     if height and f.get("vcodec") != "none":
                         res = f"{height}p"
-
-                        # Keep the format with the highest bitrate/quality for this specific resolution
                         if res not in available:
                             available[res] = f
                         else:
                             curr_f = available[res]
-                            if (f.get("tbr") or 0) > (curr_f.get("tbr") or 0):
+                            # Prioritize pre-mixed streams (with audio codec) OR higher bitrate OR known size
+                            curr_has_audio = curr_f.get("acodec") != "none"
+                            new_has_audio = f.get("acodec") != "none"
+                            
+                            if new_has_audio and not curr_has_audio:
                                 available[res] = f
+                            elif new_has_audio == curr_has_audio:
+                                if (f.get("tbr") or 0) > (curr_f.get("tbr") or 0):
+                                    available[res] = f
                 
                 results = []
-                # Sort by height descending (e.g., 1080p, 720p, ...) -- need to extract just the numbers out of e.g. "1080p 60fps"
                 sorted_res = sorted(
                     available.keys(), 
                     key=lambda x: int(re.search(r'(\d+)p', x).group(1)) if re.search(r'(\d+)p', x) else 0, 
@@ -257,27 +407,27 @@ async def fetch_ytdlp_formats(url: str) -> list[dict]:
                 
                 for res in sorted_res:
                     f = available[res]
-                    size = f.get("filesize") or f.get("filesize_approx") or 0
+                    size = f.get("filesize") or f.get("filesize_approx")
                     
-                    # If this stream lacks audio, add the best audio size we found
-                    if f.get("acodec") == "none":
+                    # Add audio size only if we have a base video size and it lacks audio
+                    if f.get("acodec") == "none" and size is not None and best_audio_size > 0:
                         size += best_audio_size
                         
                     results.append({
                         "format_id": f["format_id"],
                         "resolution": res,
                         "ext": f.get("ext", "mp4"),
-                        "filesize": size
+                        "filesize": size  # Keep as None if unknown, UI handles `humanbytes(None) -> Unknown`
                     })
                 
                 # If we only found 1 distinct resolution, we return empty list so the bot skips selection
                 if len(results) < 2:
-                    return []
+                    return {"formats": [], "title": title}
                     
-                return results
+                return {"formats": results, "title": title}
         except Exception as e:
             Config.LOGGER.error(f"Error fetching formats for {url}: {e}")
-            return []
+            return {"formats": [], "title": ""}
 
     return await loop.run_in_executor(None, _fetch)
 
@@ -317,6 +467,17 @@ async def download_ytdlp(
 
     out_dir = Config.DOWNLOAD_LOCATION
     os.makedirs(out_dir, exist_ok=True)
+    
+    Config.LOGGER.info(f"download_ytdlp started for {user_id}. SyncID={id(WEBAPP_PROGRESS)}")
+
+    # State update for WebApp
+    WEBAPP_PROGRESS[user_id] = {
+        "action": "Analyzing Media URL...",
+        "percentage": 5,
+        "current": "0 B",
+        "total": "Fetching size...",
+        "speed": "---"
+    }
 
     # Build a safe output stem from the user-chosen filename
     # Shorten to 80 chars to avoid OS length limits (e.g. for long Facebook titles)
@@ -331,19 +492,29 @@ async def download_ytdlp(
         if d["status"] == "downloading" and now - last_edit[0] >= PROGRESS_UPDATE_DELAY:
             last_edit[0] = now
             done = d.get("downloaded_bytes", 0)
-            total = d.get("total_bytes") or d.get("total_bytes_estimate", 0)
+            total = d.get("total_bytes") or d.get("total_bytes_estimate") or d.get("filesize") or d.get("filesize_approx", 0)
             speed = d.get("speed") or 0
             eta = d.get("eta") or 0
             bar = progress_bar(done, total) if total else "░" * 12
             pct = f"{done / total * 100:.1f}%" if total else "…"
             text = (
                 f"📥 **Downloading Media…**\n\n"
+                f"📁 **Name:** `{os.path.basename(outtmpl)}`\n"
                 f"[{bar}] {pct}\n"
                 f"**Done:** {humanbytes(done)}"
                 + (f" / {humanbytes(total)}" if total else "")
                 + (f"\n**Speed:** {humanbytes(speed)}/s" if speed else "")
                 + (f"\n**ETA:** {time_formatter(eta)}" if eta else "")
             )
+            # Update global WebApp tracker
+            percent = (done / total * 100) if total else 0
+            WEBAPP_PROGRESS[user_id] = {
+                "action": "Downloading Media...",
+                "current": humanbytes(done),
+                "total": humanbytes(total) if total else "Unknown",
+                "speed": f"{humanbytes(speed)}/s" if speed else "",
+                "percentage": max(1, round(percent, 1))
+            }
             asyncio.run_coroutine_threadsafe(
                 _safe_edit(progress_msg, text, reply_markup=cancel_button(user_id)),
                 loop
@@ -360,7 +531,7 @@ async def download_ytdlp(
         # If user picked a specific resolution, we try to get that video + best audio
         # or just that specific format if it's already merged.
         if ffmpeg_available:
-            fmt = f"{format_id}+bestaudio/best"
+            fmt = f"{format_id}+bestaudio/{format_id}/best"
         else:
             fmt = f"{format_id}/best"
     elif ffmpeg_available:
@@ -389,7 +560,9 @@ async def download_ytdlp(
         "noplaylist": True,
         "max_filesize": Config.MAX_FILE_SIZE,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "concurrent_fragment_downloads": 5, # Dramatically boosts DASH/HLS fragment speeds
+        "concurrent_fragment_downloads": 30, # Max out DASH/HLS fragment speeds
+        "hls_prefer_native": True,           # Force python-native HLS to preserve UI progress bars instead of silent ffmpeg delegation
+        "http_chunk_size": 10485760,         # 10MB chunked Range-requests for extreme HTTP stability
     }
 
     # Set ffmpeg_location to the DIRECTORY, not the binary path
@@ -468,8 +641,18 @@ async def download_cobalt(
             "📥 **Initializing Download…** ⏳\n_Please wait while we prepare your file..._",
             reply_markup=cancel_button(user_id)
         )
+        
+        # Initial state for WebApp
+        WEBAPP_PROGRESS[user_id] = {
+            "action": "Requesting Extraction Server...",
+            "percentage": 5,
+            "current": "0 B",
+            "total": "Unknown",
+            "speed": "---"
+        }
 
-        async with aiohttp.ClientSession() as session:
+        connector = aiohttp.TCPConnector(limit=30)
+        async with aiohttp.ClientSession(connector=connector) as session:
             # Step 1: Ask cobalt for the download URL
             async with session.post(
                 f"{api_url}/",
@@ -511,39 +694,29 @@ async def download_cobalt(
                 ext = ".mp4"
             out_path = os.path.join(out_dir, f"{safe_stem}{ext}")
 
-            # Step 2: Download the actual file
-            await _safe_edit(progress_msg, "📥 **Extracting Media…** ⚙️", reply_markup=cancel_button(user_id))
+            try:
+                # Step 2: Download extremely fast via aria2c using the Cobalt proxy URL
+                await _safe_edit(progress_msg, "📥 **Extracting Media…** ⚙️", reply_markup=cancel_button(user_id))
+                
+                # Transition state for WebApp
+                WEBAPP_PROGRESS[user_id] = {
+                    "action": "Starting Download...",
+                    "percentage": 10,
+                    "current": "0 B",
+                    "total": "Fetching...",
+                    "speed": "Waiting"
+                }
 
-            async with session.get(
-                download_url_str,
-                timeout=aiohttp.ClientTimeout(total=Config.PROCESS_MAX_TIMEOUT),
-            ) as dl_resp:
-                dl_resp.raise_for_status()
-                total = int(dl_resp.headers.get("Content-Length", 0))
-                downloaded = 0
-                last_edit = time.time()
+                await _download_aria2c(download_url_str, out_path, progress_msg, start_time_ref, user_id, cancel_ref=cancel_ref)
 
-                async with aiofiles.open(out_path, "wb") as f:
-                    async for chunk in dl_resp.content.iter_chunked(Config.CHUNK_SIZE):
-                        if cancel_ref and cancel_ref[0]:
-                            raise asyncio.CancelledError("Download cancelled.")
+            except Exception:
+                if os.path.exists(out_path):
+                    try:
+                        os.remove(out_path)
+                    except Exception:
+                        pass
+                raise
 
-                        await f.write(chunk)
-                        downloaded += len(chunk)
-                        now = time.time()
-                        if now - last_edit >= PROGRESS_UPDATE_DELAY:
-                            elapsed = now - start_time_ref[0]
-                            speed = downloaded / elapsed if elapsed else 0
-                            bar = progress_bar(downloaded, total) if total else "░" * 12
-                            text = (
-                                "📥 **Downloading Media…** ⬇️\n\n"
-                                f"{bar}\n"
-                                f"**Done:** {humanbytes(downloaded)}"
-                                + (f" / {humanbytes(total)}" if total else "")
-                                + (f"\n**Speed:** {humanbytes(speed)}/s" if speed else "")
-                            )
-                            await _safe_edit(progress_msg, text, reply_markup=cancel_button(user_id))
-                            last_edit = now
 
         mime = mimetypes.guess_type(out_path)[0] or "video/mp4"
         return out_path, mime
@@ -553,11 +726,15 @@ async def download_cobalt(
 
 
 def humanbytes(size: int) -> str:
+    if size is None or size < 0:
+        return "Unknown"
     if not size:
         return "0 B"
     for unit in ["B", "KB", "MB", "GB", "TB"]:
         if size < 1024:
-            return f"{size:.2f} {unit}" if unit != "B" else f"{int(size)} B"
+            if unit in ["B", "KB"]:
+                return f"{int(size)} {unit}"
+            return f"{size:.2f} {unit}"
         size /= 1024
     return f"{size:.2f} PB"
 
@@ -675,40 +852,64 @@ async def _download_hls(url: str, out_path: str, progress_msg, start_time_ref: l
     stderr_task = asyncio.create_task(_read_stderr())
 
     # Poll until ffmpeg finishes, editing progress every PROGRESS_UPDATE_DELAY s
-    while True:
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=1.0)
-            break  # process finished
-        except asyncio.TimeoutError:
-            pass  # still running, update progress
-        
-        if cancel_ref and cancel_ref[0]:
+    try:
+        while True:
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=1.0)
+                break  # process finished
+            except asyncio.TimeoutError:
+                pass  # still running, update progress
+            
+            if cancel_ref and cancel_ref[0]:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                raise asyncio.CancelledError("Upload cancelled.")
+
+            now = time.time()
+            if now - last_edit >= PROGRESS_UPDATE_DELAY:
+                elapsed = now - start_time_ref[0]
+                # Since HLS streaming size is unknown, we fake a pulsing progress bar in the UI
+                pulsing_pct = min(((elapsed % 10) / 10) * 100, 99.9)
+                WEBAPP_PROGRESS[user_id] = {
+                    "action": "Weaving Stream together... 🧵",
+                    "current": time_formatter(elapsed),
+                    "total": "Unknown",
+                    "speed": "Streaming",
+                    "percentage": round(pulsing_pct, 1)
+                }
+                try:
+                    await progress_msg.edit_text(
+                        f"📥 **Weaving the stream together…** 🧵\n"
+                        f"⏱ Elapsed: {time_formatter(elapsed)}",
+                        reply_markup=cancel_button(user_id)
+                    )
+                except Exception:
+                    pass
+                last_edit = now
+
+        await stderr_task  # ensure stderr is fully read
+
+        if proc.returncode != 0:
+            err_log = b"".join(stderr_chunks).decode(errors="replace")
+            raise RuntimeError(f"ffmpeg stream download failed:\n{err_log[-600:] if err_log else 'Unknown error'}")
+
+        return out_path
+    except Exception:
+        # Cleanup incomplete ffmpeg output if cancelled or failed
+        if os.path.exists(out_path):
+            try:
+                os.remove(out_path)
+            except Exception:
+                pass
+        raise
+    finally:
+        if proc.returncode is None:
             try:
                 proc.kill()
             except Exception:
                 pass
-            raise asyncio.CancelledError("Download cancelled.")
-
-        now = time.time()
-        if now - last_edit >= PROGRESS_UPDATE_DELAY:
-            elapsed = now - start_time_ref[0]
-            try:
-                await progress_msg.edit_text(
-                    f"📥 **Weaving the stream together…** 🧵\n"
-                    f"⏱ Elapsed: {time_formatter(elapsed)}",
-                    reply_markup=cancel_button(user_id)
-                )
-            except Exception:
-                pass
-            last_edit = now
-
-    await stderr_task  # ensure stderr is fully read
-
-    if proc.returncode != 0:
-        err = b"".join(stderr_chunks).decode(errors="replace")[-600:]
-        raise RuntimeError(f"ffmpeg stream download failed:\n{err}")
-
-    return out_path
 
 
 async def download_url(url: str, filename: str, progress_msg, start_time_ref: list, user_id: int, format_id: str = None, cancel_ref: list = None):
@@ -730,7 +931,9 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/120.0.0.0 Safari/537.36"
-        )
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5"
     }
 
     # ── Route yt-dlp-supported platforms ─────────────────────────────────────
@@ -769,6 +972,15 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
             else:
                 raise  # re-raise yt-dlp error for non-cobalt URLs
 
+    # Transition state for WebApp
+    WEBAPP_PROGRESS[user_id] = {
+        "action": "Identifying Resource...",
+        "percentage": 5,
+        "current": "0 B",
+        "total": "Checking...",
+        "speed": "---"
+    }
+
     # ── Probe the URL to detect content type ─────────────────────────────────
     async with aiohttp.ClientSession(headers=headers) as probe_session:
         async with probe_session.head(
@@ -778,6 +990,34 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
             mime = head.headers.get("Content-Type", "").split(";")[0].strip()
             total_str = head.headers.get("Content-Length", "0")
             total = int(total_str) if total_str.isdigit() else 0
+            
+            # Extract true filename if available from server
+            cd = head.headers.get("Content-Disposition", "")
+            cd_match = re.search(r'filename="?([^"]+)"?', cd)
+            if cd_match:
+                filename = cd_match.group(1)
+            else:
+                # If no Content-Disposition, and filename lacks an extension, guess via mime
+                if not os.path.splitext(filename)[1]:
+                    ext = mimetypes.guess_extension(mime)
+                    if ext:
+                        # Some systems return '.jpe' for jpeg
+                        if ext == '.jpe': ext = '.jpg'
+                        filename += ext
+
+    # Re-evaluate safe filename based on true network name
+    filename = smart_output_name(filename)
+    safe_name = re.sub(r'[\\/*?:"<>|]', "_", filename)[:80]
+    file_path = os.path.join(download_dir, safe_name)
+
+    # Transition state for WebApp
+    WEBAPP_PROGRESS[user_id] = {
+        "action": "Starting Stream Download...",
+        "percentage": 10,
+        "current": "0 B",
+        "total": humanbytes(total) if total else "Unknown",
+        "speed": "---"
+    }
 
     # ── Route HLS / DASH / TS streams through ffmpeg ──────────────────────────
     if needs_ffmpeg_download(url, mime):
@@ -794,55 +1034,114 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
         await _download_hls(url, mp4_path, progress_msg, start_time_ref, user_id, cancel_ref=cancel_ref)
         return mp4_path, "video/mp4"
 
-    # ── Standard aiohttp streaming download ──────────────────────────────────
+    # ── Aria2c High Speed Download ──────────────────────────────────────────────
     if total > Config.MAX_FILE_SIZE:
         raise ValueError(
             f"File too large: {humanbytes(total)} (max {humanbytes(Config.MAX_FILE_SIZE)})"
         )
 
-    start_time_ref[0] = time.time()
-    last_edit = start_time_ref[0]
-    downloaded = 0
-
-    async with aiohttp.ClientSession(headers=headers) as session:
-        async with session.get(
-            url,
-            allow_redirects=True,
-            timeout=aiohttp.ClientTimeout(total=Config.PROCESS_MAX_TIMEOUT),
-        ) as resp:
-            resp.raise_for_status()
-            # Refine content-length/mime from GET response
-            if not total:
-                total = int(resp.headers.get("Content-Length", 0))
-            mime = resp.content_type or mime or "application/octet-stream"
-
-            async with aiofiles.open(file_path, "wb") as f:
-                async for chunk in resp.content.iter_chunked(Config.CHUNK_SIZE):
-                    await f.write(chunk)
-                    downloaded += len(chunk)
-                    now = time.time()
-                    if now - last_edit >= PROGRESS_UPDATE_DELAY:
-                        elapsed = now - start_time_ref[0]
-                        speed = downloaded / elapsed if elapsed else 0
-                        eta = (total - downloaded) / speed if speed and total else 0
-                        bar = progress_bar(downloaded, total)
-                        text = (
-                            "📥 **Downloading…**\n\n"
-                            f"{bar}\n"
-                            f"**Done:** {humanbytes(downloaded)}"
-                            + (f" / {humanbytes(total)}" if total else "")
-                            + f"\n**Speed:** {humanbytes(speed)}/s\n"
-                            f"**ETA:** {time_formatter(eta)}"
-                        )
-                        try:
-                            await progress_msg.edit_text(text, reply_markup=cancel_button(user_id))
-                        except Exception:
-                            pass
-                        last_edit = now
+    await _download_aria2c(url, file_path, progress_msg, start_time_ref, user_id, cancel_ref=cancel_ref)
 
     mime_from_ext = mimetypes.guess_type(file_path)[0]
     final_mime = mime_from_ext or mime
     return file_path, final_mime
+
+
+
+# ── Aria2c Custom Downloader ──────────────────────────────────────────────────
+
+# Global aria2 client bound to the daemon we started in bot.py
+aria2 = aria2p.API(
+    aria2p.Client(
+        host="http://localhost",
+        port=6800,
+        secret=""
+    )
+)
+
+async def _download_aria2c(url: str, out_path: str, progress_msg, start_time_ref: list, user_id: int, cancel_ref: list = None) -> str:
+    """
+    Download extremely fast using aria2c native RPC daemon.
+    Uses 16 concurrent HTTP streams and no file allocation for Koyeb disk stability.
+    """
+    start_time_ref[0] = time.time()
+    last_edit = start_time_ref[0]
+    
+    # Ensure background aria2c daemon writes exactly where we expect
+    out_path = os.path.abspath(out_path)
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+
+    options = {
+        "max-connection-per-server": "16",
+        "split": "16",
+        "min-split-size": "1M",
+        "file-allocation": "none",
+        "dir": os.path.dirname(out_path),
+        "out": os.path.basename(out_path),
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "header": ["Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"]
+    }
+
+    # Add the download to the daemon
+    download = await asyncio.to_thread(aria2.add_uris, [url], options)
+
+    try:
+        while True:
+            await asyncio.to_thread(download.update)
+
+            if download.is_complete:
+                break
+
+            if cancel_ref and cancel_ref[0]:
+                await asyncio.to_thread(download.remove, force=True, files=True)
+                raise asyncio.CancelledError("Download cancelled.")
+            
+            if download.has_failed:
+                error_msg = download.error_message
+                await asyncio.to_thread(download.remove, force=True, files=True)
+                raise RuntimeError(f"aria2c download failed: {error_msg}")
+
+            now = time.time()
+            if now - last_edit >= PROGRESS_UPDATE_DELAY:
+                pct_int = int(download.progress)
+                _bar = progress_bar(pct_int, 100)
+                
+                speed_str = download.download_speed_string()
+                current_str = download.completed_length_string()
+                total_str = download.total_length_string()
+
+                text = (
+                    f"📥 **Downloading Media…** ⬇️\n\n"
+                    f"📁 **Name:** `{os.path.basename(out_path)}`\n"
+                    f"[{_bar}] {download.progress_string()}\n"
+                    f"**Done:** {current_str} / {total_str}\n"
+                    f"**Speed:** {speed_str}\n"
+                    f"**ETA:** {download.eta_string()}"
+                )
+                
+                WEBAPP_PROGRESS[user_id] = {
+                    "action": "Downloading...",
+                    "current": current_str,
+                    "total": total_str,
+                    "speed": speed_str,
+                    "percentage": pct_int
+                }
+                try:
+                    await progress_msg.edit_text(text, reply_markup=cancel_button(user_id))
+                except Exception:
+                    pass
+                last_edit = now
+
+            await asyncio.sleep(1)
+
+        return out_path
+    except Exception:
+        if os.path.exists(out_path):
+            try:
+                os.remove(out_path)
+            except Exception:
+                pass
+        raise
 
 
 
@@ -884,11 +1183,21 @@ async def upload_file(
         bar = progress_bar(current, total)
         text = (
             "📤 **Uploading…**\n\n"
+            f"📁 **Name:** `{os.path.basename(file_path)}`\n"
             f"{bar}\n"
             f"**Done:** {humanbytes(current)} / {humanbytes(total)}\n"
             f"**Speed:** {humanbytes(speed)}/s\n"
             f"**ETA:** {time_formatter(eta)}"
         )
+        # Update global WebApp tracker
+        percent = (current / total * 100) if total else 0
+        WEBAPP_PROGRESS[chat_id] = {
+            "action": "Uploading to Telegram...",
+            "current": humanbytes(current),
+            "total": humanbytes(total) if total else "Unknown",
+            "speed": f"{humanbytes(speed)}/s" if speed else "",
+            "percentage": round(percent, 1)
+        }
         try:
             await progress_msg.edit_text(text, reply_markup=cancel_button(chat_id))
         except Exception:

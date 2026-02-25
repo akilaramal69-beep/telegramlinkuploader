@@ -34,7 +34,7 @@ class Config:
     # ── File handling ─────────────────────────────────
     DOWNLOAD_LOCATION: str = "./DOWNLOADS"
     MAX_FILE_SIZE: int = 2_097_152_000          # ~2 GB (Pyrogram MTProto limit)
-    CHUNK_SIZE: int = int(os.environ.get("CHUNK_SIZE", 2048)) * 1024  # KB → bytes (Default: 2MB per chunk for faster HTTP processing)
+    CHUNK_SIZE: int = int(os.environ.get("CHUNK_SIZE", 4096)) * 1024  # KB → bytes (Default: 4MB per chunk for faster HTTP processing)
 
     # ── Misc ──────────────────────────────────────────
     LOGGER = logging
@@ -46,3 +46,5 @@ class Config:
     FFMPEG_PATH: str = os.environ.get("FFMPEG_PATH", "ffmpeg")
     SESSION_NAME: str = "url_uploader_bot"
     COBALT_API_URL: str = os.environ.get("COBALT_API_URL", "https://permanent-coral-akila-519a0c52.koyeb.app")
+    ALLOW_BOT_URL_UPLOAD: bool = os.environ.get("ALLOW_BOT_URL_UPLOAD", "True").lower() == "true"
+    ADSGRAM_BLOCK_ID = os.environ.get("ADSGRAM_BLOCK_ID", "int-23574")

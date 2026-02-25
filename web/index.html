@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cloud Uploader</title>
+
+    <!-- System Font Stack for instant load & zero data usage -->
+    <style>
+        :root {
+            --bg-color: var(--tg-theme-bg-color, #1a1a2e);
+            --text-color: var(--tg-theme-text-color, #fff);
+            --hint-color: var(--tg-theme-hint-color, #a1a1aa);
+            --button-color: var(--tg-theme-button-color, #4facfe);
+            --button-text: var(--tg-theme-button-text-color, #fff);
+            --secondary-bg: var(--tg-theme-secondary-bg-color, #16213e);
+            --accent: #00f2fe;
+            --danger: #ff4b4b;
+            --success: #00e676;
+            --glass-bg: rgba(255, 255, 255, 0.05);
+            --glass-border: rgba(255, 255, 255, 0.1)
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif
+        }
+
+        body {
+            background: var(--bg-color);
+            color: var(--text-color);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            padding: 16px;
+            overflow-x: hidden
+        }
+
+        .app-container {
+            width: 100%;
+            max-width: 500px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            padding-bottom: 30px
+        }
+
+        .hero-header {
+            text-align: center;
+            margin-top: 10px
+        }
+
+        .hero-brand {
+            display: flex;
+            justify-content: center;
+            margin-bottom: 15px
+        }
+
+        .brand-img {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 3px solid var(--button-color);
+            box-shadow: 0 0 20px rgba(79, 172, 254, .5);
+            animation: brandingPulse 3s infinite ease-in-out
+        }
+
+        .hero-header h1 {
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin-bottom: 8px
+        }
+
+        .hero-header p {
+            color: var(--hint-color);
+            font-size: .95rem;
+            line-height: 1.4
+        }
+
+        .app-description {
+            font-size: .85rem;
+            color: var(--hint-color);
+            margin-top: 12px;
+            padding: 8px 12px;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+            display: inline-block;
+            border: 1px solid var(--glass-border)
+        }
+
+        .app-description strong {
+            color: var(--button-color)
+        }
+
+        .content-panel {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 24px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3)
+        }
+
+        input {
+            width: 100%;
+            padding: 14px;
+            border-radius: 12px;
+            border: 1px solid var(--glass-border);
+            background: rgba(0, 0, 0, 0.2);
+            color: #fff;
+            font-size: 1rem;
+            outline: none;
+            margin-bottom: 10px
+        }
+
+        button {
+            background: var(--button-color);
+            color: var(--button-text);
+            border: none;
+            padding: 14px;
+            border-radius: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            width: 100%;
+            transition: opacity .2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px
+        }
+
+        button:active {
+            opacity: .8
+        }
+
+        .primary-btn {
+            background: linear-gradient(135deg, var(--button-color), var(--accent))
+        }
+
+        .section-title {
+            font-size: 1rem;
+            margin: 20px 0 10px;
+            color: var(--hint-color);
+            border-bottom: 1px solid var(--glass-border);
+            padding-bottom: 5px
+        }
+
+        .quality-grid,
+        .mode-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px
+        }
+
+        .qual-btn,
+        .mode-btn {
+            background: var(--secondary-bg);
+            border: 1px solid var(--glass-border);
+            color: #fff;
+            padding: 10px;
+            font-size: .9rem
+        }
+
+        .selected,
+        .mode-selected {
+            border-color: var(--button-color);
+            background: rgba(79, 172, 254, 0.2)
+        }
+
+        .progress-track {
+            width: 100%;
+            height: 10px;
+            background: #000;
+            border-radius: 5px;
+            margin: 15px 0;
+            overflow: hidden;
+            border: 1px solid var(--glass-border)
+        }
+
+        .progress-fill {
+            height: 100%;
+            width: 100%;
+            transform-origin: left;
+            transform: scaleX(0);
+            background: linear-gradient(90deg, var(--button-color), var(--accent));
+            transition: transform .3s ease-out
+        }
+
+        .progress-details {
+            display: flex;
+            justify-content: space-between;
+            font-size: .8rem;
+            color: var(--hint-color)
+        }
+
+        .hidden {
+            display: none !important
+        }
+
+        .error-msg {
+            color: var(--danger);
+            font-size: .85rem;
+            text-align: center;
+            margin-top: 10px
+        }
+
+        .loader {
+            border: 3px solid transparent;
+            border-top: 3px solid #fff;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            animation: spin 1s linear infinite
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg)
+            }
+
+            100% {
+                transform: rotate(360deg)
+            }
+        }
+
+        @keyframes brandingPulse {
+
+            0%,
+            100% {
+                transform: scale(1)
+            }
+
+            50% {
+                transform: scale(1.05)
+            }
+        }
+    </style>
+
+    <!-- Global Config (Injected by Backend) -->
+    <script>
+        window.APP_CONFIG = {
+            adsgram_block_id: "{{ADSGRAM_BLOCK_ID}}"
+        };
+    </script>
+
+    <!-- Defer heavy SDKs -->
+    <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+    <script src="https://sad.adsgram.ai/js/sad.min.js" defer></script>
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="hero-header">
+            <div class="hero-brand">
+                <svg class="brand-img" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="16" cy="16" r="14" fill="url(#paint0_linear_87_7225)" />
+                    <path
+                        d="M22.9866 10.2088C23.1112 9.40332 22.3454 8.76755 21.6292 9.082L7.36482 15.3448C6.85123 15.5703 6.8888 16.3483 7.42147 16.5179L10.3631 17.4547C10.9246 17.6335 11.5325 17.541 12.0228 17.2023L18.655 12.6203C18.855 12.4821 19.073 12.7665 18.9021 12.9426L14.1281 17.8646C13.665 18.3421 13.7569 19.1512 14.314 19.5005L19.659 22.8523C20.2585 23.2282 21.0297 22.8506 21.1418 22.1261L22.9866 10.2088Z"
+                        fill="white" />
+                    <defs>
+                        <linearGradient id="paint0_linear_87_7225" x1="16" y1="2" x2="16" y2="30"
+                            gradientUnits="userSpaceOnUse">
+                            <stop stop-color="#37BBFE" />
+                            <stop offset="1" stop-color="#007DBB" />
+                        </linearGradient>
+                    </defs>
+                </svg>
+            </div>
+            <h1>Cloud Uploader</h1>
+            <p>Paste a media link below to beam it directly to your chat instantly.</p>
+            <div class="app-description">
+                Support for <strong>Instagram, TikTok, Twitter/X</strong>, direct links and 700+ other sites.
+                Fast, private, and powered by MTProto.
+            </div>
+        </header>
+
+        <!-- Main Input Form -->
+        <main class="content-panel">
+            <form id="urlForm" class="input-form">
+                <div class="input-group">
+                    <input type="text" id="linkInput" placeholder="https://instagram.com/p/..." required
+                        autocomplete="off">
+                    <button type="submit" id="checkBtn">
+                        <span id="btnText">🚀 Download</span>
+                        <div class="loader hidden" id="scanLoader"></div>
+                    </button>
+                </div>
+                <div id="errorMsg" class="error-msg hidden"></div>
+            </form>
+
+            <div id="qualitySection" class="quality-selector hidden">
+                <h3 class="section-title">Select Quality</h3>
+                <div id="qualityList" class="quality-grid">
+                    <!-- Format buttons will be injected here via JS -->
+                </div>
+            </div>
+
+            <!-- Upload Mode Section -->
+            <div id="modeSection" class="mode-selector hidden">
+                <div id="renameSection" class="rename-section">
+                    <h3 class="section-title" style="margin-top:0;">Rename File</h3>
+                    <input type="text" id="filenameInput" placeholder="Enter filename.mp4" autocomplete="off">
+                </div>
+
+                <h3 class="section-title">Upload As</h3>
+                <div class="mode-grid">
+                    <button class="mode-btn mode-selected" data-mode="media">🎬 Media/Video</button>
+                    <button class="mode-btn" data-mode="doc">📄 Document</button>
+                </div>
+                <button id="finalDownloadBtn" class="primary-btn pulse">🚀 Beam to Chat</button>
+            </div>
+
+            <!-- Live Progress Tracking -->
+            <div id="progressSection" class="progress-section hidden">
+                <div class="progress-header">
+                    <h3 id="progressAction">Initializing...</h3>
+                    <span id="progressPercent">0%</span>
+                </div>
+
+                <div class="progress-track">
+                    <div id="progressFill" class="progress-fill"></div>
+                </div>
+
+                <div class="progress-details">
+                    <span id="progressBytes">0 MB / 0 MB</span>
+                    <span id="progressSpeed">--/s</span>
+                </div>
+
+                <button id="cancelBtn" class="qual-btn pulse hidden"
+                    style="background: rgba(255, 75, 75, 0.2); border-color: var(--danger); margin-top:20px; color: #fff;">
+                    ✖️ Cancel Process
+                </button>
+
+                <!-- Appears only when download is 100% complete -->
+                <button id="openTgBtn" class="primary-btn pulse hidden" style="margin-top:20px;">
+                    ✨ Get Processed File ✨
+                </button>
+            </div>
+        </main>
+
+    </div>
+
+    <!-- Application Logic -->
+    <script src="app.js?v=5" defer></script>
+</body>
+
+</html>
