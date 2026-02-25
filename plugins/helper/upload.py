@@ -576,8 +576,12 @@ async def download_ytdlp(
         "max_filesize": Config.MAX_FILE_SIZE,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "concurrent_fragment_downloads": 30, # Max out DASH/HLS fragment speeds
-        "hls_prefer_native": True,           # Force python-native HLS to preserve UI progress bars instead of silent ffmpeg delegation
-        "http_chunk_size": 10485760,         # 10MB chunked Range-requests for extreme HTTP stability
+        "hls_prefer_native": False,          # Use aria2c for fragments if available
+        "external_downloader": "aria2c",     # USE ARIA2 FOR MAX SPEED
+        "external_downloader_args": {
+            "aria2c": ["-x16", "-s16", "-j10", "-k1M", "--file-allocation=none"]
+        },
+        "buffersize": 1048576,               # 1MB Buffer
     }
     # Impersonate browser TLS fingerprint if supported
     try:
