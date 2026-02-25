@@ -172,19 +172,8 @@ YTDLP_DOMAINS = {
 
 # Domains where cobalt API can be used as an alternative/fallback
 COBALT_DOMAINS = {
-    "instagram.com",
-    "pinterest.com", "pin.it",
-    "tiktok.com", "vm.tiktok.com",
-    "twitter.com", "x.com", "t.co",
-    "reddit.com", "v.redd.it", "redd.it",
-    "vimeo.com",
-    "soundcloud.com",
-    "bilibili.com", "b23.tv",
     "youtube.com", "youtu.be",
-    "dailymotion.com", "dai.ly",
-    "streamable.com",
-    "tumblr.com",
-    "twitch.tv", "clips.twitch.tv",
+    "reddit.com", "v.redd.it", "redd.it",
 }
 
 
@@ -938,15 +927,6 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
 
     # ── Route yt-dlp-supported platforms ─────────────────────────────────────
     if is_ytdlp_url(url):
-        # Check if it's a YouTube URL to block it
-        is_youtube = any(x in url.lower() for x in ["youtube.com", "youtu.be", "youtube-nocookie.com"])
-        if is_youtube:
-            try:
-                await progress_msg.edit_text("📥 **YouTube downloading not supported...** 🚫")
-            except Exception:
-                pass
-            raise ValueError("YouTube downloading is explicitly disabled.")
-
         try:
             status_text = "📥 **Doing some black magic…** 🪄\n_(connecting to the dark side…)_"
             await progress_msg.edit_text(status_text, reply_markup=cancel_button(user_id))
