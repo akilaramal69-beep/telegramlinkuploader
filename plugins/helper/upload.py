@@ -575,16 +575,19 @@ async def download_ytdlp(
         "no_warnings": True,
         "force_ipv4": True,
         "nocheckcertificate": True,
+        "cookiefile": Config.COOKIES_FILE,
         "merge_output_format": "mp4",
         "overwrites": True,
         "noplaylist": True,
         "max_filesize": Config.MAX_FILE_SIZE,
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "concurrent_fragment_downloads": 30, # Max out DASH/HLS fragment speeds
-        "hls_prefer_native": True,           # Native HLS allows better progress reporting
+        "concurrent_fragment_downloads": 10, # Reduced for improved stability on low-resource hosts
+        "hls_prefer_native": True,          # Native HLS allows better progress reporting
+        "cachedir": False,                   # Disable cache to avoid path/permission issues on Koyeb
+        "trim_file_name": 100,              # Prevent Errno 2 by ensuring total path length stays safe
+        "retries": 15,
+        "fragment_retries": 15,
         "buffersize": 1048576,               # 1MB Buffer for speed
-        "retries": 10,
-        "fragment_retries": 10,
     }
 
 
