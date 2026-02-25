@@ -12,7 +12,7 @@ from pyrogram import Client
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import aria2p
 from plugins.config import Config
-from utils.shared import WEBAPP_PROGRESS
+from utils.shared import WEBAPP_PROGRESS, get_http_session
 
 PROGRESS_UPDATE_DELAY = 1  # seconds between progress edits
 
@@ -82,9 +82,9 @@ async def resolve_url(url: str) -> str:
     # 1. Resolve Reddit short links
     if "redd.it" in url or "/s/" in url.lower():
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.head(url, allow_redirects=True, timeout=10) as resp:
-                    url = str(resp.url)
+            session = await get_http_session()
+            async with session.head(url, allow_redirects=True, timeout=10) as resp:
+                url = str(resp.url)
         except Exception:
             pass
 
@@ -93,9 +93,9 @@ async def resolve_url(url: str) -> str:
         # Resolve t.co first if necessary
         if "t.co" in url.lower():
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.head(url, allow_redirects=True, timeout=10) as resp:
-                        url = str(resp.url)
+                session = await get_http_session()
+                async with session.head(url, allow_redirects=True, timeout=10) as resp:
+                    url = str(resp.url)
             except Exception:
                 pass
                 
@@ -105,14 +105,14 @@ async def resolve_url(url: str) -> str:
             tweet_id = match.group(1)
             api_url = f"https://api.vxtwitter.com/x/status/{tweet_id}"
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(api_url, timeout=10) as resp:
-                        if resp.status == 200:
-                            data = await resp.json()
-                            media_urls = data.get("mediaURLs", [])
-                            if media_urls:
-                                # We return the direct raw video/image URL instead of the twitter page!
-                                return media_urls[0]
+                session = await get_http_session()
+                async with session.get(api_url, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        media_urls = data.get("mediaURLs", [])
+                        if media_urls:
+                            # We return the direct raw video/image URL instead of the twitter page!
+                            return media_urls[0]
             except Exception:
                 pass
 
@@ -269,13 +269,13 @@ async def fetch_http_filename(url: str, default_name: str = "downloaded_file") -
         )
     }
     try:
-        async with aiohttp.ClientSession(headers=headers) as probe_session:
-            async with probe_session.head(
-                url, allow_redirects=True,
-                timeout=aiohttp.ClientTimeout(total=10)
-            ) as head:
-                mime = head.headers.get("Content-Type", "").split(";")[0].strip()
-                cd = head.headers.get("Content-Disposition", "")
+        session = await get_http_session()
+        async with session.head(
+            url, allow_redirects=True,
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as head:
+            mime = head.headers.get("Content-Type", "").split(";")[0].strip()
+            cd = head.headers.get("Content-Disposition", "")
                 
                 # Check server-provided exact filename
                 cd_match = re.search(r'filename="?([^"]+)"?', cd)
@@ -630,19 +630,18 @@ async def download_cobalt(
             "speed": "---"
         }
 
-        connector = aiohttp.TCPConnector(limit=30)
-        async with aiohttp.ClientSession(connector=connector) as session:
-            # Step 1: Ask cobalt for the download URL
-            async with session.post(
-                f"{api_url}/",
-                json=payload,
-                headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status != 200:
-                    error_text = await resp.text()
-                    raise ValueError(f"Download server returned {resp.status}: {error_text[:200]}")
-                data = await resp.json()
+        session = await get_http_session()
+        # Step 1: Ask cobalt for the download URL
+        async with session.post(
+            f"{api_url}/",
+            json=payload,
+            headers=headers,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            if resp.status != 200:
+                error_text = await resp.text()
+                raise ValueError(f"Download server returned {resp.status}: {error_text[:200]}")
+            data = await resp.json()
 
             status = data.get("status")
 
@@ -697,8 +696,8 @@ async def download_cobalt(
                 raise
 
 
-        mime = mimetypes.guess_type(out_path)[0] or "video/mp4"
-        return out_path, mime
+            mime = mimetypes.guess_type(out_path)[0] or "video/mp4"
+            return out_path, mime
 
     except Exception as e:
         raise ValueError(f"Download failed: {e}")
@@ -959,28 +958,28 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
     }
 
     # ── Probe the URL to detect content type ─────────────────────────────────
-    async with aiohttp.ClientSession(headers=headers) as probe_session:
-        async with probe_session.head(
-            url, allow_redirects=True,
-            timeout=aiohttp.ClientTimeout(total=30)
-        ) as head:
-            mime = head.headers.get("Content-Type", "").split(";")[0].strip()
-            total_str = head.headers.get("Content-Length", "0")
-            total = int(total_str) if total_str.isdigit() else 0
-            
-            # Extract true filename if available from server
-            cd = head.headers.get("Content-Disposition", "")
-            cd_match = re.search(r'filename="?([^"]+)"?', cd)
-            if cd_match:
-                filename = cd_match.group(1)
-            else:
-                # If no Content-Disposition, and filename lacks an extension, guess via mime
-                if not os.path.splitext(filename)[1]:
-                    ext = mimetypes.guess_extension(mime)
-                    if ext:
-                        # Some systems return '.jpe' for jpeg
-                        if ext == '.jpe': ext = '.jpg'
-                        filename += ext
+    session = await get_http_session()
+    async with session.head(
+        url, allow_redirects=True,
+        timeout=aiohttp.ClientTimeout(total=30)
+    ) as head:
+        mime = head.headers.get("Content-Type", "").split(";")[0].strip()
+        total_str = head.headers.get("Content-Length", "0")
+        total = int(total_str) if total_str.isdigit() else 0
+        
+        # Extract true filename if available from server
+        cd = head.headers.get("Content-Disposition", "")
+        cd_match = re.search(r'filename="?([^"]+)"?', cd)
+        if cd_match:
+            filename = cd_match.group(1)
+        else:
+            # If no Content-Disposition, and filename lacks an extension, guess via mime
+            if not os.path.splitext(filename)[1]:
+                ext = mimetypes.guess_extension(mime)
+                if ext:
+                    # Some systems return '.jpe' for jpeg
+                    if ext == '.jpe': ext = '.jpg'
+                    filename += ext
 
     # Re-evaluate safe filename based on true network name
     filename = smart_output_name(filename)

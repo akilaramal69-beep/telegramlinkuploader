@@ -14,3 +14,4 @@ requests==2.32.3
 yt-dlp
 python-dotenv==1.0.1
 aria2p
+waitress==3.0.0

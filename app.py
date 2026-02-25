@@ -2,6 +2,7 @@ import os
 import asyncio
 from flask import Flask, request, jsonify, send_from_directory
 from plugins.config import Config
+import time
 
 # Serve the MiniApp directly from the new `web/` folder
 app = Flask(__name__, static_folder="web")
@@ -12,6 +13,21 @@ app.is_shutting_down = False
 
 # Global cache for the optimized HTML to save Disk I/O
 _INDEX_HTML_CACHE = None
+
+async def prune_progress_task():
+    """Background task to keep memory low by pruning old progress data."""
+    from utils.shared import WEBAPP_PROGRESS
+    while True:
+        try:
+            now = time.time()
+            # Remove entries that haven't been updated for 1 hour
+            to_del = [uid for uid, info in WEBAPP_PROGRESS.items() 
+                      if now - info.get("_last_update", now) > 3600]
+            for uid in to_del:
+                del WEBAPP_PROGRESS[uid]
+        except Exception:
+            pass
+        await asyncio.sleep(600) # Check every 10 mins
 
 @app.route("/")
 def index():

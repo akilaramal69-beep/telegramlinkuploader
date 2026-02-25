@@ -16,8 +16,11 @@ async def ping_handler(client, message):
 
 def run_health_server():
     from app import app as flask_app
-    print("🌍 Starting Flask server...")
-    flask_app.run(host="0.0.0.0", port=8080, use_reloader=False)
+    print("🌍 Starting health & progress server...")
+    # Flask's built-in server is threaded by default in 2.0+ 
+    # and sufficient for small health checks & progress polling.
+    # To scale even further, we ensure threaded is ON.
+    flask_app.run(host="0.0.0.0", port=8080, use_reloader=False, threaded=True)
 
 
 if __name__ == "__main__":
@@ -53,12 +56,23 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"❌ Failed to write cookies file: {e}")
 
-    # Start aria2c daemon
-    import subprocess
     print("🚀 Starting aria2c RPC daemon...")
     try:
-        subprocess.Popen(["aria2c", "--enable-rpc", "--rpc-listen-all=true", "--rpc-allow-origin-all=true", "-D"])
-        print("✅ aria2c daemon started.")
+        aria_cmd = [
+            "aria2c",
+            "--enable-rpc",
+            "--rpc-listen-all=true",
+            "--rpc-allow-origin-all=true",
+            "--max-connection-per-server=16",
+            "--split=16",
+            "--min-split-size=1M",
+            "--max-overall-download-limit=0",
+            "--file-allocation=none",
+            "--max-concurrent-downloads=100",
+            "-D"
+        ]
+        subprocess.Popen(aria_cmd)
+        print("✅ aria2c daemon started with optimized high-concurrency flags.")
     except Exception as e:
         print(f"⚠️ Failed to start aria2c daemon: {e}")
 
@@ -84,8 +98,12 @@ if __name__ == "__main__":
 
         # Capture the active asyncio loop so Flask threads can dispatch tasks to it
         print("🌀 Capturing event loop...")
-        from app import app as flask_app
+        from app import app as flask_app, prune_progress_task
         flask_app.bot_loop = asyncio.get_running_loop()
+
+        # Start the background pruning task
+        asyncio.create_task(prune_progress_task())
+        print("🧹 Progress pruning task started.")
 
         # Mark health check as ready — Koyeb now routes traffic here
         flask_app.is_ready = True
