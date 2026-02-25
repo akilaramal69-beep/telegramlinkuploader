@@ -1,0 +1,217 @@
+# 🤖 Telegram URL Uploader Bot
+
+Upload files up to **2 GB** to Telegram from any URL — including Instagram, TikTok, Twitter/X and 700+ more platforms. Built with [Pyrogram](https://docs.pyrogram.org/) (MTProto) for large file support, deployable on **Koyeb**.
+
+---
+
+## ✨ Features
+
+| Feature | Details |
+|---|---|
+| 📱 Telegram Mini App | Modern web interface for link scanning, quality selection, and progress tracking |
+| 📤 Direct URL Upload | Send any direct download URL — bot downloads & uploads |
+| 📺 yt-dlp Integration | Download from Instagram, TikTok, Twitter/X, Reddit, Facebook, Vimeo + 700 more |
+| ✏️ File Renaming | Bot asks for a new filename before every upload |
+| 🎬 Media / Document mode | Choose to send as streamable video or raw document |
+| 🎵 Audio Extraction | Extract high-quality audio tracks directly from video links |
+| 🎞️ Auto Thumbnail | ffmpeg auto-generates thumbnail from video frame |
+| ⏱️ Video Metadata | ffprobe extracts duration, width, height for proper Telegram video display |
+| 🌊 HLS / DASH streams | `.m3u8`, `.mpd`, `.ts` streamed via ffmpeg → saved as `.mp4` |
+| 💾 Up to 2 GB | Pyrogram MTProto — not the 50 MB Bot API limit |
+| 🚀 Upload Boost | pyroblack `upload_boost=True` + 5 parallel MTProto connections |
+| 📝 Custom Captions | Per-user saved captions |
+| 🖼️ Permanent Thumbnails | Stored as Telegram `file_id` — survive restarts & redeployments |
+| 📊 Live Progress | Real-time progress bars in both Bot chat and Web Mini App |
+| 📢 Broadcast | Send messages to all users (admin) |
+| 🚫 Ban / Unban | User management (admin) |
+| ☁️ Koyeb Optimized | Startup validation, stdout logging, cookie env var, Docker ffmpeg |
+| 🛡️ Proxy Support | Bypass IP-based rate limits on Instagram/Pinterest |
+| 🍪 Cookie Auth | Use `COOKIES_DATA` env var or `cookies.txt` for authenticated downloads |
+| 🔄 Cobalt API Fallback | Auto-retries Instagram/Pinterest/TikTok via [cobalt](https://github.com/imputnet/cobalt) when yt-dlp fails — no cookies needed |
+| 💰 Monetization | Native Adsgram integration (Interstitial/Rewarded ads) for the Mini App |
+| ⚡ Speed Optimized | Critical CSS inlining, script deferring, and font preloading for instant Mini App startup |
+| 🎯 Smart Format Selection | Precise maximum quality format harvesting from yt-dlp metadata |
+
+---
+
+## 🌐 Supported Platforms (yt-dlp)
+
+Instagram · TikTok · Twitter / X · Facebook · Reddit · Vimeo · Dailymotion · Twitch · SoundCloud · Bilibili · Rumble · Odysee · Streamable · Mixcloud · Pinterest + [700 more](https://github.com/yt-dlp/yt-dlp/blob/master/supportedsites.md)
+
+---
+
+## 🚀 Bot Commands
+
+```
+/start           – Check if bot is alive 🔔
+/help            – Show all commands ❓
+/about           – Bot info ℹ️
+/upload <url>    – Upload file from URL 📤
+/skip            – Keep original filename during rename
+
+/caption <text>  – Set custom upload caption 📝
+/showcaption     – View your caption
+/clearcaption    – Clear caption
+
+/setthumb        – Reply to a photo to set permanent thumbnail 🖼️
+/showthumb       – Preview your thumbnail
+/delthumb        – Delete thumbnail
+
+--- Admin only ---
+/broadcast <msg> – Broadcast to all users 📢
+/total           – Total registered users 👥
+/ban <id>        – Ban a user ⛔
+/unban <id>      – Unban a user ✅
+/status          – CPU / RAM / Disk stats + FFmpeg detection 🚀
+```
+
+---
+
+## ⚙️ Environment Variables
+
+Copy `.env.example` to `.env` and fill in:
+
+### Required
+
+| Variable | Description |
+|---|---|
+| `BOT_TOKEN` | From [@BotFather](https://t.me/BotFather) |
+| `API_ID` | From [my.telegram.org](https://my.telegram.org) |
+| `API_HASH` | From [my.telegram.org](https://my.telegram.org) |
+| `OWNER_ID` | Your Telegram user ID |
+| `DATABASE_URL` | MongoDB Atlas connection string |
+| `LOG_CHANNEL` | Private channel ID for upload logs (negative number) |
+
+### Optional
+
+| Variable | Default | Description |
+|---|---|---|
+| `BOT_USERNAME` | `UrlUploaderBot` | Bot username (without @) |
+| `UPDATES_CHANNEL` | _(none)_ | Updates channel username — button shown only if set |
+| `ADMIN` | _(none)_ | Space-separated extra admin user IDs |
+| `SESSION_STRING` | _(none)_ | Pyrogram session string for 4 GB uploads (premium account) |
+| `CHUNK_SIZE` | `512` | Download chunk size in KB |
+
+### Koyeb / Cloud
+
+| Variable | Default | Description |
+|---|---|---|
+| `COOKIES_DATA` | _(none)_ | Paste full `cookies.txt` content here — bot auto-converts `\n` to real newlines on startup |
+| `PROXY` | _(none)_ | Proxy URL: `http://user:pass@host:port` or `socks5://...` |
+| `FFMPEG_PATH` | `/usr/bin/ffmpeg` | Path to ffmpeg binary (Docker-ready) |
+| `COBALT_API_URL` | `https://permanent-coral-akila-5...` | Cobalt API endpoint for fallback |
+| `ALLOW_BOT_URL_UPLOAD` | `True` | Set to `False` to force users to use the Mini App interface |
+| `ADSGRAM_BLOCK_ID` | `int-23574` | Customizable Adsgram Block ID for Mini App monetization |
+
+---
+
+## 🐳 Local Setup
+
+```bash
+git clone https://github.com/akilaramal69-beep/telegramlinkuploader.git
+cd telegramlinkuploader
+
+cp .env.example .env
+# Fill in your values in .env
+
+pip install -r requirements.txt
+python bot.py
+```
+
+> **Requires:** `ffmpeg` and `ffprobe` installed on the system (included automatically in the Docker image).
+
+---
+
+## ☁️ Deploy to Koyeb
+
+### Method 1 — Docker (recommended)
+
+1. Fork this repo on GitHub
+2. Go to [koyeb.com](https://www.koyeb.com) → **Create Service** → **Docker**
+3. Use **GitHub** source and enable Docker build
+4. Add all **Required** environment variables
+5. Set **Port** to `8080` (health check endpoint: `/health`)
+6. Deploy! ✅
+
+### Method 2 — GitHub + Buildpack
+
+1. Connect your GitHub repo to Koyeb
+2. Build Command: `pip install -r requirements.txt`
+3. Run Command: `python bot.py`
+4. Port: `8080`
+5. Add env vars → Deploy ✅
+
+### Koyeb Tips
+
+- **Bot won't start?** Check runtime logs — the bot validates `BOT_TOKEN`, `API_ID`, and `API_HASH` at startup and shows which ones are missing.
+- **Instagram/Pinterest still failing?** The bot now **automatically falls back to cobalt API** when yt-dlp fails — no cookies needed. If the public cobalt API is blocked, self-host cobalt and set `COBALT_API_URL`.
+- **Reddit/Facebook videos have no audio?** ffmpeg is pre-installed in the Docker image with `FFMPEG_PATH` pre-set. No extra config needed.
+- **Bot logs** go to Koyeb's runtime console automatically (stdout only, no file logging).
+
+### Download Flow
+
+```
+User sends URL
+    │
+    ├─ yt-dlp supported?  ───  ① Try yt-dlp (with cookies if available)
+    │                             │
+    │                         ❌ fails?
+    │                             │
+    │                         ② Auto-retry via cobalt API (no cookies)
+    │
+    ├─ HLS/DASH stream?   ───  Download via ffmpeg
+    │
+    └─ Direct URL         ───  Download via aiohttp
+```
+
+---
+
+## 💰 Monetization (Adsgram)
+
+The Mini App is integrated with [Adsgram](https://adsgram.ai) to display interstitial video ads before files are queued, allowing you to easily monetize your bot's web traffic.
+
+To configure your own ad revenue stream:
+1. Create an account on Adsgram and generate a new **Interstitial** Block.
+2. Copy your unique Block ID (e.g., `int-98765`).
+3. Set the `ADSGRAM_BLOCK_ID` environment variable in Koyeb (or your `.env` file) to your new Block ID.
+4. Restart the bot. The Mini App will automatically begin using your block ID to serve ads!
+
+---
+
+## 📁 Project Structure
+
+```
+telegramlinkuploader/
+├── bot.py                  # Entrypoint: Initializer & Lifecycle Manager
+├── app.py                  # Flask Web Controller & Mini App API
+├── requirements.txt
+├── Dockerfile
+├── .env.example
+├── utils/
+│   └── shared.py           # Unified State Singleton (Client & Progress)
+├── web/                    # Mini App Frontend Assets (HTML/CSS/JS)
+└── plugins/
+    ├── config.py           # Environment Variable Management
+    ├── commands.py         # Bot Handlers & WebApp Bridge Logic
+    ├── admin.py            # Admin Dashboard (Broadcast, Stats)
+    └── helper/
+        ├── upload.py       # Core Execution Engine (yt-dlp/ffmpeg/aiohttp)
+        └── database.py     # MongoDB Persistence Layer
+```
+
+---
+
+## 📝 Notes
+
+- **Monetized UX**: Integrated Adsgram SDK shows ads before file queueing, allowing for sustainable bot operation.
+- **Fast Startup**: Optimized frontend delivery with inlined styles and deferred JS, ensuring the Mini App opens in < 2 seconds.
+- **Unified State**: The bot and web app share a single runtime state via `utils/shared.py`, ensuring a 0% progress lag and preventing "split-brain" issues.
+- **Dual-engine downloads**: yt-dlp is tried first; if it fails, the bot auto-retries via the cobalt API.
+- **Startup validation**: The bot checks for required env vars (`BOT_TOKEN`, `API_ID`, `API_HASH`) and exits with a clear error if any are missing.
+- **2 GB limit** via Pyrogram's MTProto API. The standard HTTP Bot API caps at 50 MB.
+- **4 GB uploads** (Telegram Premium) require a `SESSION_STRING` of a premium account.
+- **yt-dlp format selection** is adaptive: best quality streams + ffmpeg merge when available; pre-merged fallback without it.
+- **HLS/DASH streams** (`.m3u8`, `.mpd`, `.ts`) are downloaded and remuxed to `.mp4` via ffmpeg.
+- Files are downloaded to `./DOWNLOADS/` and deleted immediately after upload.
+- **Filename safety**: Filenames are capped at 80 characters and sanitized for all filesystems.
+- Thumbnails are stored as Telegram `file_id` strings in MongoDB — no local files needed.
