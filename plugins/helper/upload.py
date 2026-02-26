@@ -666,6 +666,12 @@ async def download_ytdlp(
 
     ydl_opts = {
         "format": fmt,
+        "format_sort": [
+            "res:1080",   # Prefer 1080p
+            "vbr",        # Prefer highest video bitrate
+            "tbr",        # Prefer highest total bitrate
+            "fps",        # Prefer highest frame rate
+        ],
         "outtmpl": outtmpl,
         "progress_hooks": [_progress_hook],
         "quiet": True,
