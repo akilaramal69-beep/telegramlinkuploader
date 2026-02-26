@@ -286,7 +286,7 @@ async def fetch_ytdlp_title(url: str) -> str | None:
                 "quiet": True,
                 "no_warnings": True,
                 "skip_download": True,
-                "format_sort": ["res:1080", "vbr", "tbr", "fps"],
+                "format_sort": ["res", "vbr", "tbr", "fps"],
                 "force_ipv4": True, # Common fix for Connection Reset on VPS
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "extractor_args": {
@@ -471,7 +471,7 @@ async def fetch_ytdlp_formats(url: str) -> dict:
             opts = {
                 "quiet": True,
                 "no_warnings": True,
-                "format_sort": ["res:1080", "vbr", "tbr", "fps"],
+                "format_sort": ["res", "vbr", "tbr", "fps"],
                 "force_ipv4": True,
                 "nocheckcertificate": True, # Ignore SSL artifacts
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -730,7 +730,7 @@ async def download_ytdlp(
     ydl_opts = {
         "format": fmt,
         "format_sort": [
-            "res:1080",   # Prefer 1080p
+            "res",        # Prefer highest resolution (absolute best)
             "vbr",        # Prefer highest video bitrate
             "tbr",        # Prefer highest total bitrate
             "fps",        # Prefer highest frame rate
