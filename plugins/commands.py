@@ -524,6 +524,10 @@ async def upload_handler(client: Client, message: Message):
             quote=True,
         )
 
+    # Explicit YouTube Block
+    if "youtube.com" in url.lower() or "youtu.be" in url.lower():
+        return await message.reply_text("❌ YouTube downloading not allowed.", quote=True)
+
     status_info = await message.reply_text("🔍 Analyzing file info…", quote=True)
     try:
         url = await resolve_url(url)
@@ -626,6 +630,11 @@ async def text_handler(client: Client, message: Message):
             )
 
         # Pre-flight check: Extract the real extension via HTTP Sniffing or yt-dlp first!
+        
+        # Explicit YouTube Block
+        if "youtube.com" in text.lower() or "youtu.be" in text.lower():
+            return await message.reply_text("❌ YouTube downloading not allowed.", quote=True)
+            
         status_info = await message.reply_text("🔍 Analyzing file info…", quote=True)
         try:
             text = await resolve_url(text)
