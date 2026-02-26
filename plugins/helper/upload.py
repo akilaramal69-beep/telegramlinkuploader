@@ -267,6 +267,17 @@ async def fetch_ytdlp_title(url: str) -> str | None:
     """
     if not YTDLP_AVAILABLE:
         return None
+        
+    # PRIMARY FOR YOUTUBE: Try external API first to bypass bot detection
+    if "youtube.com" in url or "youtu.be" in url:
+        Config.LOGGER.info(f"Primary YouTube title extraction via external API: {url}")
+        info = await external_extract_youtube(url)
+        if info:
+            title = info.get("title") or info.get("id") or "video"
+            title = re.sub(r'[\\/*?"<>|:\n\r\t]', "_", title).strip()
+            ext = info.get("ext") or "mp4"
+            return f"{title[:80]}.{ext}"
+
     loop = asyncio.get_running_loop()
 
     def _fetch():
@@ -300,19 +311,7 @@ async def fetch_ytdlp_title(url: str) -> str | None:
         except Exception:
             return None
 
-    result = await loop.run_in_executor(None, _fetch)
-
-    # FALLBACK: If local yt-dlp fails for YouTube, try external API
-    if result is None and ("youtube.com" in url or "youtu.be" in url):
-        Config.LOGGER.info(f"Local title extraction failed for YouTube. Trying external API: {url}")
-        info = await external_extract_youtube(url)
-        if info:
-            title = info.get("title") or info.get("id") or "video"
-            title = re.sub(r'[\\/*?"<>|:\n\r\t]', "_", title).strip()
-            ext = info.get("ext") or "mp4"
-            return f"{title[:80]}.{ext}"
-
-    return result
+    return await loop.run_in_executor(None, _fetch)
 
 
 async def fetch_http_filename(url: str, default_name: str = "downloaded_file") -> str:
@@ -390,6 +389,54 @@ async def fetch_ytdlp_formats(url: str) -> dict:
     """
     if not YTDLP_AVAILABLE:
         return {"formats": [], "title": ""}
+
+    # PRIMARY FOR YOUTUBE: Try external API first to bypass bot detection
+    if "youtube.com" in url or "youtu.be" in url:
+        Config.LOGGER.info(f"Primary YouTube format extraction via external API: {url}")
+        info = await external_extract_youtube(url)
+        if info:
+            formats = info.get("formats", [])
+            title = info.get("title", "video")
+
+            best_audio_size = 0
+            for f in formats:
+                if f.get("vcodec") == "none" and f.get("acodec") != "none":
+                    size = f.get("filesize") or f.get("filesize_approx") or 0
+                    if size > best_audio_size:
+                        best_audio_size = size
+
+            available = {}
+            for f in formats:
+                height = f.get("height")
+                if height and f.get("vcodec") != "none":
+                    res = f"{height}p"
+                    available[res] = f
+
+            format_results = []
+            sorted_res = sorted(
+                available.keys(),
+                key=lambda x: int(re.search(r'(\d+)p', x).group(1)) if re.search(r'(\d+)p', x) else 0,
+                reverse=True
+            )
+
+            for res in sorted_res:
+                f = available[res]
+                size = f.get("filesize") or f.get("filesize_approx")
+                if f.get("acodec") == "none" and size is not None and best_audio_size > 0:
+                    size += best_audio_size
+
+                format_results.append({
+                    "format_id": f["format_id"],
+                    "resolution": res,
+                    "ext": f.get("ext", "mp4"),
+                    "filesize": size
+                })
+
+            if len(format_results) >= 2:
+                return {"formats": format_results, "title": title}
+            else:
+                return {"formats": [], "title": title}
+
     loop = asyncio.get_running_loop()
 
     def _fetch():
@@ -486,56 +533,7 @@ async def fetch_ytdlp_formats(url: str) -> dict:
             Config.LOGGER.error(f"Error fetching formats for {url}: {e}")
             return {"formats": [], "title": ""}
 
-    result = await loop.run_in_executor(None, _fetch)
-
-    # FALLBACK: If local yt-dlp format fetching fails for YouTube, try external API
-    if (not result or not result.get("formats")) and ("youtube.com" in url or "youtu.be" in url):
-        Config.LOGGER.info(f"Local format extraction failed for YouTube. Trying external API: {url}")
-        info = await external_extract_youtube(url)
-        if info:
-            formats = info.get("formats", [])
-            title = info.get("title", "video")
-
-            best_audio_size = 0
-            for f in formats:
-                if f.get("vcodec") == "none" and f.get("acodec") != "none":
-                    size = f.get("filesize") or f.get("filesize_approx") or 0
-                    if size > best_audio_size:
-                        best_audio_size = size
-
-            available = {}
-            for f in formats:
-                height = f.get("height")
-                if height and f.get("vcodec") != "none":
-                    res = f"{height}p"
-                    available[res] = f
-
-            format_results = []
-            sorted_res = sorted(
-                available.keys(),
-                key=lambda x: int(re.search(r'(\d+)p', x).group(1)) if re.search(r'(\d+)p', x) else 0,
-                reverse=True
-            )
-
-            for res in sorted_res:
-                f = available[res]
-                size = f.get("filesize") or f.get("filesize_approx")
-                if f.get("acodec") == "none" and size is not None and best_audio_size > 0:
-                    size += best_audio_size
-
-                format_results.append({
-                    "format_id": f["format_id"],
-                    "resolution": res,
-                    "ext": f.get("ext", "mp4"),
-                    "filesize": size
-                })
-
-            if len(format_results) >= 2:
-                return {"formats": format_results, "title": title}
-            else:
-                return {"formats": [], "title": title}
-
-    return result
+    return await loop.run_in_executor(None, _fetch)
 
 async def check_ffmpeg() -> bool:
     """Check if ffmpeg is available."""
@@ -724,19 +722,30 @@ async def download_ytdlp(
 
     async def _run_async() -> str:
         try:
+            # PRIMARY FOR YOUTUBE: Try external API first during download exploration too
+            cached_info = None
+            if "youtube.com" in url or "youtu.be" in url:
+                Config.LOGGER.info(f"Primary YouTube download extraction via external API: {url}")
+                cached_info = await external_extract_youtube(url)
+
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 # 1. Extract metadata only
-                try:
-                    info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
-                except Exception as e:
-                    # FALLBACK: If local extraction fails for YouTube during download phase
-                    if "youtube.com" in url or "youtu.be" in url:
-                        Config.LOGGER.info(f"Local download-phase extraction failed for YouTube. Trying external API: {url}")
-                        info = await external_extract_youtube(url)
-                        if not info:
-                            raise e 
-                    else:
-                        raise e
+                if cached_info:
+                    info = cached_info
+                    # If external API provides a specific format for the requested resolution, try to re-process it locally
+                    # Note: process_info will handle the download.
+                else:
+                    try:
+                        info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
+                    except Exception as e:
+                        # FALLBACK: If local extraction fails for YouTube during download phase
+                        if "youtube.com" in url or "youtu.be" in url:
+                            Config.LOGGER.info(f"Local download-phase extraction failed for YouTube. Trying external API: {url}")
+                            info = await external_extract_youtube(url)
+                            if not info:
+                                raise e 
+                        else:
+                            raise e
 
                 # Use safe_stem to build path (we prefer the user's filename)
                 ext = info.get("ext", "mp4")
