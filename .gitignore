@@ -1,0 +1,11 @@
+# Temporary and generated files
+temp_ytapi/
+DOWNLOADS/
+*.log
+__pycache__/
+*.pyc
+.env
+cookies.txt
+credentials.json
+.DS_Store
+Thumbs.db
