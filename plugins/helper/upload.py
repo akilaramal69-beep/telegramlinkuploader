@@ -286,6 +286,7 @@ async def fetch_ytdlp_title(url: str) -> str | None:
                 "quiet": True,
                 "no_warnings": True,
                 "skip_download": True,
+                "format_sort": ["res:1080", "vbr", "tbr", "fps"],
                 "force_ipv4": True, # Common fix for Connection Reset on VPS
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "extractor_args": {
@@ -444,6 +445,7 @@ async def fetch_ytdlp_formats(url: str) -> dict:
             opts = {
                 "quiet": True,
                 "no_warnings": True,
+                "format_sort": ["res:1080", "vbr", "tbr", "fps"],
                 "force_ipv4": True,
                 "nocheckcertificate": True, # Ignore SSL artifacts
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
