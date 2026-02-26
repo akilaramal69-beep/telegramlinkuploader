@@ -198,9 +198,6 @@ def is_ytdlp_url(url: str) -> bool:
     """Return True if the URL belongs to a yt-dlp-supported platform dynamically."""
     if not YTDLP_AVAILABLE:
         return False
-    # Explicitly exclude YouTube from yt-dlp path to force Cobalt usage
-    if any(x in url.lower() for x in ["youtube.com", "youtu.be", "youtube-nocookie.com"]):
-        return False
     try:
         host = urllib.parse.urlparse(url).netloc.lower().lstrip("www.")
         # Step 1: Check Hardcoded fallback domains (handles shortened links like `t.co` and `fb.com/share`)
@@ -256,6 +253,14 @@ async def fetch_ytdlp_title(url: str) -> str | None:
                 "skip_download": True,
                 "force_ipv4": True, # Common fix for Connection Reset on VPS
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["web", "default"],
+                    },
+                    "youtubepot-bgutilhttp": {
+                        "base_url": ["http://localhost:4416"],
+                    }
+                }
             }
             if Config.COOKIES_FILE and os.path.exists(Config.COOKIES_FILE):
                 opts["cookiefile"] = Config.COOKIES_FILE
@@ -359,6 +364,14 @@ async def fetch_ytdlp_formats(url: str) -> dict:
                 "force_ipv4": True,
                 "nocheckcertificate": True, # Ignore SSL artifacts
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["web", "default"],
+                    },
+                    "youtubepot-bgutilhttp": {
+                        "base_url": ["http://localhost:4416"],
+                    }
+                }
             }
 
 
@@ -372,7 +385,7 @@ async def fetch_ytdlp_formats(url: str) -> dict:
                 opts["referer"] = "https://www.pornhub.com/"
                 opts["geo_bypass"] = True
                 opts["socket_timeout"] = 20
-                opts["extractor_args"] = {'pornhub': {'prefer_formats': 'mp4'}}
+                opts["extractor_args"]["pornhub"] = {'prefer_formats': 'mp4'}
 
             with yt_dlp.YoutubeDL(opts) as ydl:
                 info = ydl.extract_info(url, download=False)
@@ -589,8 +602,20 @@ async def download_ytdlp(
         "retries": 15,
         "fragment_retries": 15,
         "buffersize": 1048576,               # 1MB Buffer for speed
+        "extractor_args": {
+            "youtube": {
+                "player_client": ["web", "default"],
+            },
+            "youtubepot-bgutilhttp": {
+                "base_url": ["http://localhost:4416"],
+            }
+        }
     }
 
+    # Additional logic for NSFW/Blocked sites
+    if "pornhub.com" in url.lower():
+        ydl_opts["http_headers"] = {"Referer": "https://www.pornhub.com/"}
+        ydl_opts["extractor_args"]["pornhub"] = {'prefer_formats': 'mp4'}
 
     # Set ffmpeg_location to the DIRECTORY, not the binary path
     ffmpeg_dir = _get_ffmpeg_dir()
