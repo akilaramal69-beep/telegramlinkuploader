@@ -236,6 +236,30 @@ async def _safe_edit(msg, text: str, reply_markup=None):
         pass
 
 
+async def external_extract_youtube(url: str) -> dict | None:
+    """
+    Call the external Koyeb API for YouTube metadata extraction.
+    Used as a fallback when local yt-dlp is blocked.
+    """
+    if not Config.YT_API_URL:
+        return None
+    
+    api_url = f"{Config.YT_API_URL.rstrip('/')}/extract"
+    try:
+        session = await get_http_session()
+        # High timeout (120s) because the external API uses WARP + Cold Boot
+        async with session.post(api_url, json={"url": url}, timeout=120) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                Config.LOGGER.info(f"Successfully extracted YouTube metadata via external API: {url}")
+                return data
+            else:
+                Config.LOGGER.error(f"External YouTube API failed with status {resp.status}")
+    except Exception as e:
+        Config.LOGGER.error(f"External YouTube API exception: {e}")
+    return None
+
+
 async def fetch_ytdlp_title(url: str) -> str | None:
     """
     Extract the video title from yt-dlp (no download).
@@ -255,7 +279,7 @@ async def fetch_ytdlp_title(url: str) -> str | None:
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "extractor_args": {
                     "youtube": {
-                        "player_client": ["web", "default"],
+                        "player_client": ["web", "creator"],
                     },
                     "youtubepot-bgutilhttp": {
                         "base_url": ["http://localhost:4416"],
@@ -276,7 +300,19 @@ async def fetch_ytdlp_title(url: str) -> str | None:
         except Exception:
             return None
 
-    return await loop.run_in_executor(None, _fetch)
+    result = await loop.run_in_executor(None, _fetch)
+
+    # FALLBACK: If local yt-dlp fails for YouTube, try external API
+    if result is None and ("youtube.com" in url or "youtu.be" in url):
+        Config.LOGGER.info(f"Local title extraction failed for YouTube. Trying external API: {url}")
+        info = await external_extract_youtube(url)
+        if info:
+            title = info.get("title") or info.get("id") or "video"
+            title = re.sub(r'[\\/*?"<>|:\n\r\t]', "_", title).strip()
+            ext = info.get("ext") or "mp4"
+            return f"{title[:80]}.{ext}"
+
+    return result
 
 
 async def fetch_http_filename(url: str, default_name: str = "downloaded_file") -> str:
@@ -366,7 +402,7 @@ async def fetch_ytdlp_formats(url: str) -> dict:
                 "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "extractor_args": {
                     "youtube": {
-                        "player_client": ["web", "default"],
+                        "player_client": ["web", "creator"],
                     },
                     "youtubepot-bgutilhttp": {
                         "base_url": ["http://localhost:4416"],
@@ -450,7 +486,56 @@ async def fetch_ytdlp_formats(url: str) -> dict:
             Config.LOGGER.error(f"Error fetching formats for {url}: {e}")
             return {"formats": [], "title": ""}
 
-    return await loop.run_in_executor(None, _fetch)
+    result = await loop.run_in_executor(None, _fetch)
+
+    # FALLBACK: If local yt-dlp format fetching fails for YouTube, try external API
+    if (not result or not result.get("formats")) and ("youtube.com" in url or "youtu.be" in url):
+        Config.LOGGER.info(f"Local format extraction failed for YouTube. Trying external API: {url}")
+        info = await external_extract_youtube(url)
+        if info:
+            formats = info.get("formats", [])
+            title = info.get("title", "video")
+
+            best_audio_size = 0
+            for f in formats:
+                if f.get("vcodec") == "none" and f.get("acodec") != "none":
+                    size = f.get("filesize") or f.get("filesize_approx") or 0
+                    if size > best_audio_size:
+                        best_audio_size = size
+
+            available = {}
+            for f in formats:
+                height = f.get("height")
+                if height and f.get("vcodec") != "none":
+                    res = f"{height}p"
+                    available[res] = f
+
+            format_results = []
+            sorted_res = sorted(
+                available.keys(),
+                key=lambda x: int(re.search(r'(\d+)p', x).group(1)) if re.search(r'(\d+)p', x) else 0,
+                reverse=True
+            )
+
+            for res in sorted_res:
+                f = available[res]
+                size = f.get("filesize") or f.get("filesize_approx")
+                if f.get("acodec") == "none" and size is not None and best_audio_size > 0:
+                    size += best_audio_size
+
+                format_results.append({
+                    "format_id": f["format_id"],
+                    "resolution": res,
+                    "ext": f.get("ext", "mp4"),
+                    "filesize": size
+                })
+
+            if len(format_results) >= 2:
+                return {"formats": format_results, "title": title}
+            else:
+                return {"formats": [], "title": title}
+
+    return result
 
 async def check_ffmpeg() -> bool:
     """Check if ffmpeg is available."""
@@ -604,7 +689,7 @@ async def download_ytdlp(
         "buffersize": 1048576,               # 1MB Buffer for speed
         "extractor_args": {
             "youtube": {
-                "player_client": ["web", "default"],
+                "player_client": ["web", "creator"],
             },
             "youtubepot-bgutilhttp": {
                 "base_url": ["http://localhost:4416"],
@@ -1050,6 +1135,7 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
         except Exception as ytdlp_err:
             if isinstance(ytdlp_err, asyncio.CancelledError):
                 raise
+            
             # If yt-dlp fails and cobalt supports this URL, try cobalt as fallback
             if is_cobalt_url(url):
                 Config.LOGGER.info(
@@ -1063,7 +1149,9 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
                         f"Error 1: {ytdlp_err}\n\nError 2: {cobalt_err}"
                     ) from ytdlp_err
             else:
-                raise  # re-raise yt-dlp error for non-cobalt URLs
+                # If neither yt-dlp nor Cobalt succeeded, raise immediately.
+                # DO NOT fall through to the raw HTTP generic downloader, solving the "0 B file" issue.
+                raise ValueError(str(ytdlp_err)) from ytdlp_err
 
     # Secondary extraction route: Force Cobalt for skipped yt-dlp domains (e.g. YouTube)
     if is_cobalt_url(url):

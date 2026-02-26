@@ -46,5 +46,6 @@ class Config:
     FFMPEG_PATH: str = os.environ.get("FFMPEG_PATH", "ffmpeg")
     SESSION_NAME: str = "url_uploader_bot"
     COBALT_API_URL: str = os.environ.get("COBALT_API_URL", "https://permanent-coral-akila-519a0c52.koyeb.app")
+    YT_API_URL: str = os.environ.get("YT_API_URL", "https://uneven-harli-maduranga11-a44d35d2.koyeb.app")
     ALLOW_BOT_URL_UPLOAD: bool = os.environ.get("ALLOW_BOT_URL_UPLOAD", "True").lower() == "true"
     ADSGRAM_BLOCK_ID = os.environ.get("ADSGRAM_BLOCK_ID", "int-23574")
