@@ -423,6 +423,14 @@ async def fetch_ytdlp_formats(url: str) -> dict:
             for res in sorted_res:
                 f = available[res]
                 size = f.get("filesize") or f.get("filesize_approx")
+                
+                # Estimate size if missing using bitrate and duration
+                if size is None:
+                    tbr = f.get("tbr")
+                    duration = info.get("duration")
+                    if tbr and duration:
+                        size = int((tbr * 1024 / 8) * duration)
+
                 if f.get("acodec") == "none" and size is not None and best_audio_size > 0:
                     size += best_audio_size
 
@@ -430,13 +438,31 @@ async def fetch_ytdlp_formats(url: str) -> dict:
                     "format_id": f["format_id"],
                     "resolution": res,
                     "ext": f.get("ext", "mp4"),
-                    "filesize": size
+                    "filesize": size,
+                    "url": f.get("url")
                 })
 
-            if len(format_results) >= 2:
+            if format_results:
+                # ── Final safety probe for missing YouTube filesizes ─────────────────
+                session = await get_http_session()
+                for f_dict in format_results:
+                    if f_dict.get("filesize") is None and f_dict.get("url"):
+                        try:
+                            async with session.head(
+                                f_dict["url"], allow_redirects=True, 
+                                timeout=aiohttp.ClientTimeout(total=5),
+                                proxy=Config.PROXY
+                            ) as head:
+                                cl = head.headers.get("Content-Length")
+                                if cl and cl.isdigit():
+                                    f_dict["filesize"] = int(cl)
+                        except Exception:
+                            pass
+                    # Remove temporary URL before sending to client
+                    if "url" in f_dict:
+                        del f_dict["url"]
+                
                 return {"formats": format_results, "title": title}
-            else:
-                return {"formats": [], "title": title}
 
     loop = asyncio.get_running_loop()
 
@@ -515,6 +541,13 @@ async def fetch_ytdlp_formats(url: str) -> dict:
                     f = available[res]
                     size = f.get("filesize") or f.get("filesize_approx")
                     
+                    # Estimate size if missing using bitrate and duration
+                    if size is None:
+                        tbr = f.get("tbr")
+                        duration = info.get("duration")
+                        if tbr and duration:
+                            size = int((tbr * 1024 / 8) * duration)
+
                     # Add audio size only if we have a base video size and it lacks audio
                     if f.get("acodec") == "none" and size is not None and best_audio_size > 0:
                         size += best_audio_size
@@ -523,11 +556,12 @@ async def fetch_ytdlp_formats(url: str) -> dict:
                         "format_id": f["format_id"],
                         "resolution": res,
                         "ext": f.get("ext", "mp4"),
-                        "filesize": size  # Keep as None if unknown, UI handles `humanbytes(None) -> Unknown`
+                        "filesize": size,
+                        "url": f.get("url")
                     })
                 
-                # If we only found 1 distinct resolution, we return empty list so the bot skips selection
-                if len(results) < 2:
+                # If we only found 0 formats, we return empty list so the bot skips selection
+                if len(results) < 1:
                     return {"formats": [], "title": title}
                     
                 return {"formats": results, "title": title}
@@ -535,7 +569,32 @@ async def fetch_ytdlp_formats(url: str) -> dict:
             Config.LOGGER.error(f"Error fetching formats for {url}: {e}")
             return {"formats": [], "title": ""}
 
-    return await loop.run_in_executor(None, _fetch)
+    res = await loop.run_in_executor(None, _fetch)
+    
+    # ── Final safety probe for missing filesizes ─────────────────────────────
+    if res and res.get("formats"):
+        session = await get_http_session()
+        for f_dict in res["formats"]:
+            # If still None (estimation failed) and we have a direct stream URL, try HEAD
+            if f_dict.get("filesize") is None and f_dict.get("url"):
+                try:
+                    # Short timeout to avoid blocking UI
+                    async with session.head(
+                        f_dict["url"], allow_redirects=True, 
+                        timeout=aiohttp.ClientTimeout(total=5),
+                        proxy=Config.PROXY
+                    ) as head:
+                        cl = head.headers.get("Content-Length")
+                        if cl and cl.isdigit():
+                            f_dict["filesize"] = int(cl)
+                except Exception:
+                    pass
+            
+            # Remove temporary URL before sending to client
+            if "url" in f_dict:
+                del f_dict["url"]
+
+    return res
 
 async def check_ffmpeg() -> bool:
     """Check if ffmpeg is available."""
