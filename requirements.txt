@@ -12,6 +12,7 @@ filetype==1.2.0
 Pillow==10.3.0
 requests==2.32.3
 yt-dlp
+bgutil-ytdlp-pot-provider
 python-dotenv==1.0.1
 aria2p
 waitress==3.0.0
