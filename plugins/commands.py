@@ -391,9 +391,8 @@ async def cb_quality(client: Client, callback_query: CallbackQuery):
     await callback_query.answer()
     
     if format_id.startswith("best_"):
-        actual_format = format_id.split("best_")[1]
         chosen_label = "Best (Auto)"
-        format_id = actual_format
+        format_id = "best"
     else:
         chosen_label = format_id
 
@@ -768,6 +767,10 @@ async def trigger_webapp_download(chat_id: int, url: str, format_id: str, mode: 
     # The mode string comes across as 'media' or 'doc'
     force_document = (mode == "doc")
     
+    # Normalize "best_*" to "best" for unrestricted quality
+    if format_id and format_id.startswith("best_"):
+        format_id = "best"
+
     # Fire and forget onto the active loop
     asyncio.create_task(
         do_upload(

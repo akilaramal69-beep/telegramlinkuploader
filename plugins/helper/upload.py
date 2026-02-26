@@ -700,9 +700,11 @@ async def download_ytdlp(
     ffmpeg_available = await check_ffmpeg()
 
     if format_id == "best":
-        # User requested max quality but wants to avoid slow FFmpeg merging times.
-        # "best" explicitly asks yt-dlp for the best pre-merged video/audio file.
-        fmt = "best[ext=mp4]/best"
+        # User requested absolute max quality (unrestricted resolution)
+        if ffmpeg_available:
+            fmt = "bestvideo+bestaudio/best"
+        else:
+            fmt = "best"
     elif format_id:
         # If user picked a specific resolution, we try to get that video + best audio
         # or just that specific format if it's already merged.
