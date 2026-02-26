@@ -726,58 +726,73 @@ async def download_ytdlp(
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 # 1. Extract metadata only
-                info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
-                
+                try:
+                    info = await loop.run_in_executor(None, lambda: ydl.extract_info(url, download=False))
+                except Exception as e:
+                    # FALLBACK: If local extraction fails for YouTube during download phase
+                    if "youtube.com" in url or "youtu.be" in url:
+                        Config.LOGGER.info(f"Local download-phase extraction failed for YouTube. Trying external API: {url}")
+                        info = await external_extract_youtube(url)
+                        if not info:
+                            raise e 
+                    else:
+                        raise e
+
                 # Use safe_stem to build path (we prefer the user's filename)
                 ext = info.get("ext", "mp4")
                 target_path = os.path.join(out_dir, f"{safe_stem}.{ext}")
                 
                 # 2. Identify if handover to aria2c is possible (single direct file)
-                # If requested_formats is missing or only has 1 format, it's usually a single file.
                 req_formats = info.get("requested_formats")
                 is_single = not req_formats or len(req_formats) == 1
-                
-                # Check protocol — avoid aria2 for complex streams (DASH/HLS) that yt-dlp handles better natively
                 protocol = info.get("protocol", "")
                 
-                # Do NOT hand off complex social media sites to aria2c. 
-                # They often require specialized cookie logic or dynamic tokens 
-                # that aria2c fails on (downloading a tiny HTML page instead).
                 extractor = info.get("extractor_key", "").lower()
                 tricky_extractors = ["facebook", "instagram", "twitter", "x", "tiktok"]
                 is_tricky = any(t in extractor for t in tricky_extractors)
                 
                 is_direct = "http" in protocol and "m3u8" not in protocol and "dash" not in protocol and not is_tricky
 
+                downloaded_path = None
                 if is_single and is_direct:
                     Config.LOGGER.info(f"Handing off direct URL to aria2c for max speed: {url}")
-                    # Forward headers (User-Agent, Cookie, Referer)
                     headers = info.get("http_headers", {})
-                    # Ensure cookies from the cookiefile are included if provided by yt-dlp
-                    return await _download_aria2c(
+                    downloaded_path = await _download_aria2c(
                         info["url"], target_path, progress_msg, start_time_ref, user_id, 
                         cancel_ref=cancel_ref, 
                         headers=headers
                     )
+                else:
+                    # 3. Fallback: Use yt-dlp native downloader
+                    Config.LOGGER.info(f"Using native yt-dlp downloader for complex stream/merge: {url}")
+                    await loop.run_in_executor(None, lambda: ydl.process_info(info))
+                    
+                    # Determine output path
+                    mp4_path = os.path.join(out_dir, f"{safe_stem}.mp4")
+                    if os.path.exists(mp4_path):
+                        downloaded_path = mp4_path
+                    else:
+                        candidates = sorted(
+                            [f for f in os.listdir(out_dir) if f.startswith(safe_stem)],
+                            key=lambda f: os.path.getsize(os.path.join(out_dir, f)),
+                            reverse=True,
+                        )
+                        if candidates:
+                            downloaded_path = os.path.join(out_dir, candidates[0])
                 
-                # 3. Fallback: Use yt-dlp native downloader (with progress hooks)
-                # This handles merging (video+audio) and fragmented streams (HLS/DASH)
-                Config.LOGGER.info(f"Using native yt-dlp downloader for complex stream/merge: {url}")
-                await loop.run_in_executor(None, lambda: ydl.process_info(info))
-                
-                # Merged mp4 is the most likely output
-                mp4_path = os.path.join(out_dir, f"{safe_stem}.mp4")
-                if os.path.exists(mp4_path):
-                    return mp4_path
-                # Fallback: find any file starting with the safe stem
-                candidates = sorted(
-                    [f for f in os.listdir(out_dir) if f.startswith(safe_stem)],
-                    key=lambda f: os.path.getsize(os.path.join(out_dir, f)),
-                    reverse=True,
-                )
-                if candidates:
-                    return os.path.join(out_dir, candidates[0])
-                raise FileNotFoundError("Error: output file not found after download")
+                if not downloaded_path or not os.path.exists(downloaded_path):
+                    raise FileNotFoundError("Error: output file not found after download")
+
+                # CRITICAL: Fix 0B file issue
+                if os.path.getsize(downloaded_path) == 0:
+                    try:
+                        os.remove(downloaded_path)
+                    except:
+                        pass
+                    raise ValueError("Downloaded file is empty (0 bytes). The download probably failed silently or was blocked.")
+
+                return downloaded_path
+
         except Exception as e:
             if isinstance(e, asyncio.CancelledError):
                 raise
@@ -904,6 +919,12 @@ async def download_cobalt(
                         pass
                 raise
 
+            if not os.path.exists(out_path) or os.path.getsize(out_path) == 0:
+                try:
+                    os.remove(out_path)
+                except:
+                    pass
+                raise ValueError("Downloaded file from secondary server is empty (0 bytes).")
 
             mime = mimetypes.guess_type(out_path)[0] or "video/mp4"
             return out_path, mime
@@ -1131,7 +1152,14 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
         except Exception:
             pass
         try:
-            return await download_ytdlp(url, filename, progress_msg, start_time_ref, user_id, format_id=format_id, cancel_ref=cancel_ref)
+            res_path, res_mime = await download_ytdlp(url, filename, progress_msg, start_time_ref, user_id, format_id=format_id, cancel_ref=cancel_ref)
+            
+            # Final guard against 0B files leaking to uploader
+            if res_path and os.path.exists(res_path) and os.path.getsize(res_path) > 0:
+                return res_path, res_mime
+            else:
+                raise ValueError("Final yt-dlp download produced a 0B file.")
+
         except Exception as ytdlp_err:
             if isinstance(ytdlp_err, asyncio.CancelledError):
                 raise
