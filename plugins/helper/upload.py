@@ -6,6 +6,7 @@ import mimetypes
 import re
 import shutil
 import urllib.parse
+from PIL import Image
 import aiohttp
 import aiofiles
 from pyrogram import Client
@@ -1340,11 +1341,29 @@ async def upload_file(
 
     if thumb_file_id:
         try:
-            thumb_local = await client.download_media(
+            # First, download to a generic path to see what extension Telegram gives us
+            temp_thumb = await client.download_media(
                 thumb_file_id,
-                file_name=os.path.join(Config.DOWNLOAD_LOCATION, f"thumb_user_{chat_id}_{thumb_suffix}.jpg"),
+                file_name=os.path.join(Config.DOWNLOAD_LOCATION, f"raw_thumb_{chat_id}_{thumb_suffix}"),
             )
-        except Exception:
+            if temp_thumb and os.path.exists(temp_thumb):
+                # Now normalize it with Pillow: Resize to 320x320 (proportional) and convert to JPEG
+                normalized_path = os.path.join(Config.DOWNLOAD_LOCATION, f"thumb_user_{chat_id}_{thumb_suffix}.jpg")
+                try:
+                    with Image.open(temp_thumb) as img:
+                        img.thumbnail((320, 320))
+                        if img.mode != 'RGB':
+                            img = img.convert('RGB')
+                        img.save(normalized_path, "JPEG", quality=85, optimize=True)
+                    thumb_local = normalized_path
+                except Exception as img_err:
+                    Config.LOGGER.error(f"Thumbnail normalization failed for {chat_id}: {img_err}")
+                finally:
+                    # Cleanup the raw download
+                    if os.path.exists(temp_thumb):
+                        os.remove(temp_thumb)
+        except Exception as dl_err:
+            Config.LOGGER.error(f"Custom thumbnail download failed for {chat_id}: {dl_err}")
             thumb_local = None
 
     if not thumb_local and is_video:
@@ -1387,16 +1406,15 @@ async def upload_file(
         elif is_audio:
             await client.send_audio(chat_id, file_path, **kwargs)
         elif is_image:
-            img_kwargs = dict(caption=caption, progress=_progress)
-            if thumb_local:
-                img_kwargs["thumb"] = thumb_local
-            await client.send_photo(chat_id, file_path, **img_kwargs)
+            # 🚨 FIX: Pyrogram Photo messages DO NOT support thumbnails. 
+            # If thumb_local is set, we MUST NOT pass it to send_photo.
+            await client.send_photo(chat_id, file_path, caption=caption, progress=_progress)
         else:
             await client.send_document(chat_id, file_path, **kwargs)
     except Exception as e:
         Config.LOGGER.error(f"Critical Pyrogram send error for {file_path}: {e}")
         # Log more info to help debug serialization issues
-        Config.LOGGER.error(f"Metadata: {meta}, Thumb: {thumb_local}, Caption Len: {len(caption) if caption else 0}")
+        Config.LOGGER.error(f"Metadata: {meta}, Thumb: {thumb_local}, Caption Len: {len(caption) if caption else 0}, Mime: {mime}")
         raise
     finally:
         # Clean up any temp thumbnail files

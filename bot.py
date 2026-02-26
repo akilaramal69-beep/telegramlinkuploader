@@ -39,7 +39,14 @@ if __name__ == "__main__":
         print("   Set them in .env or in your Koyeb environment settings.")
         sys.exit(1)
 
-    # Ensure download folder exists
+    # Ensure download folder exists and is clean on startup
+    if os.path.exists(Config.DOWNLOAD_LOCATION):
+        import shutil
+        try:
+            shutil.rmtree(Config.DOWNLOAD_LOCATION)
+            print("🧹 Cleaned old DOWNLOADS folder on startup.")
+        except Exception as e:
+            print(f"⚠️ Could not clean DOWNLOADS folder: {e}")
     os.makedirs(Config.DOWNLOAD_LOCATION, exist_ok=True)
 
     # Handle cookies from environment variable (useful for Koyeb)
