@@ -12,7 +12,6 @@ if (window.Telegram?.WebApp) {
 // UI Elements
 const urlForm = document.getElementById('urlForm');
 const linkInput = document.getElementById('linkInput');
-const pasteBtn = document.getElementById('pasteBtn');
 const checkBtn = document.getElementById('checkBtn');
 const scanLoader = document.getElementById('scanLoader');
 const errorMsg = document.getElementById('errorMsg');
@@ -59,27 +58,6 @@ let currentFormats = [];
 function showError(msg) {
     errorMsg.textContent = msg;
     errorMsg.classList.remove('hidden');
-}
-
-// ── Native Clipboard Paste ──
-if (pasteBtn) {
-    pasteBtn.addEventListener('click', () => {
-        if (tg.readTextFromClipboard) {
-            tg.readTextFromClipboard((text) => {
-                if (text) {
-                    linkInput.value = text;
-                    tg.HapticFeedback.notificationOccurred('success');
-                }
-            });
-        } else {
-            // Fallback for browsers outside Telegram
-            navigator.clipboard.readText().then(text => {
-                linkInput.value = text;
-            }).catch(err => {
-                console.error("Clipboard access denied:", err);
-            });
-        }
-    });
 }
 
 function hideError() {

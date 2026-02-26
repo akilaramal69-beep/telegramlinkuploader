@@ -108,7 +108,7 @@
 
         input {
             width: 100%;
-            padding: 14px 45px 14px 14px; /* Extra padding on right for the paste button */
+            padding: 14px;
             border-radius: 12px;
             border: 1px solid var(--glass-border);
             background: rgba(0, 0, 0, 0.2);
@@ -116,31 +116,6 @@
             font-size: 1rem;
             outline: none;
             margin-bottom: 10px;
-        }
-
-        .input-wrapper {
-            position: relative;
-            width: 100%;
-        }
-
-        .paste-btn {
-            position: absolute;
-            right: 12px;
-            top: 25%; /* Roughly center vertically inside the input before the button below it */
-            transform: translateY(-50%);
-            background: none;
-            border: none;
-            color: var(--button-color);
-            cursor: pointer;
-            padding: 5px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: auto;
-        }
-        
-        .paste-btn:active {
-            opacity: 0.7;
         }
 
         button {
@@ -309,16 +284,8 @@
         <main class="content-panel">
             <form id="urlForm" class="input-form">
                 <div class="input-group">
-                    <div class="input-wrapper">
-                        <input type="text" id="linkInput" placeholder="https://instagram.com/p/..." required
-                            autocomplete="off">
-                        <button type="button" id="pasteBtn" class="paste-btn" title="Paste from Clipboard">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                            </svg>
-                        </button>
-                    </div>
+                    <input type="text" id="linkInput" placeholder="https://instagram.com/p/..." required
+                        autocomplete="off">
                     <button type="submit" id="checkBtn">
                         <span id="btnText">🚀 Download</span>
                         <div class="loader hidden" id="scanLoader"></div>
