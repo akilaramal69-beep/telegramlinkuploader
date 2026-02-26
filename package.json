@@ -1,0 +1,25 @@
+{
+  "name": "target_repo",
+  "version": "1.0.0",
+  "description": "Upload files up to **2 GB** to Telegram from any URL — including Instagram, TikTok, Twitter/X and 700+ more platforms. Built with [Pyrogram](https://docs.pyrogram.org/) (MTProto) for large file support, deployable on **Koyeb**.",
+  "main": "po_server.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akilaramal69-beep/telegramlinkuploader.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/akilaramal69-beep/telegramlinkuploader/issues"
+  },
+  "homepage": "https://github.com/akilaramal69-beep/telegramlinkuploader#readme",
+  "dependencies": {
+    "express": "^5.2.1",
+    "youtube-po-token-generator": "^0.6.0"
+  }
+}

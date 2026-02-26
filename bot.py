@@ -27,51 +27,25 @@ def run_health_server():
 def setup_bgutil():
     """Downloads and extracts the bgutil-pot rust server binary if missing."""
     bin_dir = os.path.join(os.getcwd(), "bin")
-    os.makedirs(bin_dir, exist_ok=True)
-    
-    system = platform.system().lower()
-    machine = platform.machine().lower()
-    
-    bin_name = "bgutil-pot.exe" if system == "windows" else "bgutil-pot"
-    bin_path = os.path.join(bin_dir, bin_name)
-    
-    if os.path.exists(bin_path):
-        return bin_path
+def setup_po_token_server():
+    """
+    Ensure the Node.js PO Token server dependencies are installed dynamically
+    so we don't need to manually check-in node_modules to GitHub.
+    """
+    if not os.path.exists("package.json"):
+        print("📦 Initializing package.json for PO Token server...")
+        subprocess.run(["npm", "init", "-y"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         
-    print(f"📥 Downloading bgutil-pot server for {system} ({machine})...")
+    if not os.path.exists("node_modules/youtube-po-token-generator") or not os.path.exists("node_modules/express"):
+        print("📦 Installing Express and YouTube PO Token Generator dependencies...")
+        subprocess.run(
+            ["npm", "install", "express", "youtube-po-token-generator"],
+            stdout=subprocess.DEVNULL, 
+            stderr=subprocess.DEVNULL
+        )
+        print("✅ Node.js dependencies installed.")
     
-    # Official releases from jim60105
-    # Simplified logic: Only targeting Linux (Koyeb) and Windows (Local Testing) x86_64
-    url = ""
-    if system == "windows":
-        url = "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/latest/download/bgutil-pot-x86_64-pc-windows-msvc.zip"
-    else:
-        # Default to Linux musl for best compatibility on Alpine/Debian containers
-        url = "https://github.com/jim60105/bgutil-ytdlp-pot-provider-rs/releases/latest/download/bgutil-pot-x86_64-unknown-linux-musl.tar.gz"
-        
-    try:
-        if url.endswith(".zip"):
-            zip_path = os.path.join(bin_dir, "bgutil.zip")
-            urllib.request.urlretrieve(url, zip_path)
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(bin_dir)
-            os.remove(zip_path)
-        else:
-            import tarfile
-            tar_path = os.path.join(bin_dir, "bgutil.tar.gz")
-            urllib.request.urlretrieve(url, tar_path)
-            with tarfile.open(tar_path, 'r:gz') as tar_ref:
-                tar_ref.extractall(bin_dir)
-            os.remove(tar_path)
-            
-        if system != "windows":
-            os.chmod(bin_path, 0o755) # Make executable
-            
-        print("✅ bgutil-pot server downloaded successfully.")
-        return bin_path
-    except Exception as e:
-        print(f"⚠️ Failed to download bgutil-pot: {e}")
-        return None
+    return "po_server.js"
 
 
 if __name__ == "__main__":
@@ -116,24 +90,24 @@ if __name__ == "__main__":
 
     # ── Start Background Services ──────────────────────────────────────────
     
-    print("🚀 Starting bgutil-pot (YouTube PO Token) server...")
-    bgutil_bin = setup_bgutil()
+    print("🚀 Starting youtube-po-token-generator (Node.js) server...")
+    po_script = setup_po_token_server()
     pot_process = None
-    if bgutil_bin:
+    if po_script and os.path.exists(po_script):
         try:
             # Run on port 4416 (default)
-            pot_cmd = [bgutil_bin, "server", "--port", "4416", "--host", "127.0.0.1"]
+            pot_cmd = ["node", po_script]
             pot_process = subprocess.Popen(
                 pot_cmd, 
                 stdout=subprocess.DEVNULL, 
                 stderr=subprocess.DEVNULL
             )
-            print("✅ bgutil-pot server started on port 4416.")
+            print("✅ Node.js PO Token server started on port 4416.")
             
             # Ensure it shuts down when the bot exits
             atexit.register(lambda: pot_process.terminate() if pot_process else None)
         except Exception as e:
-            print(f"⚠️ Failed to start bgutil-pot server: {e}")
+            print(f"⚠️ Failed to start Node.js PO Token server: {e}")
             
     print("🚀 Starting aria2c RPC daemon...")
     try:
