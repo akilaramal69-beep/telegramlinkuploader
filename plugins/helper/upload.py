@@ -881,8 +881,26 @@ async def download_ytdlp(
                             if proc.returncode == 0 and os.path.exists(final_target):
                                 os.remove(downloaded_path)
                                 downloaded_path = final_target
+                            else:
+                                # FALLBACK: Full re-encode (needed for GIF -> MP4 etc)
+                                Config.LOGGER.info(f"Remuxing failed, falling back to full re-encode for {filename_ext}")
+                                cmd_encode = [
+                                    "ffmpeg", "-y", "-i", downloaded_path,
+                                    "-vcodec", "libx264", "-acodec", "aac",
+                                    "-pix_fmt", "yuv420p", "-preset", "fast",
+                                    "-crf", "23", final_target
+                                ]
+                                proc_enc = await asyncio.create_subprocess_exec(
+                                    *cmd_encode,
+                                    stdout=asyncio.subprocess.DEVNULL,
+                                    stderr=asyncio.subprocess.PIPE
+                                )
+                                await proc_enc.communicate()
+                                if proc_enc.returncode == 0 and os.path.exists(final_target):
+                                    os.remove(downloaded_path)
+                                    downloaded_path = final_target
                         except Exception as remux_err:
-                            Config.LOGGER.error(f"Extension remuxing failed: {remux_err}")
+                            Config.LOGGER.error(f"Extension enforcement failed: {remux_err}")
                 
                 if not downloaded_path or not os.path.exists(downloaded_path):
                     raise FileNotFoundError("Error: output file not found after download")
@@ -933,7 +951,7 @@ async def download_cobalt(
     api_url = Config.COBALT_API_URL.rstrip("/")
     payload = {
         "url": url,
-        "downloadMode": "auto",
+        "downloadMode": "video",  # Force video to avoid GIF/Audio fallbacks
         "videoQuality": "1080",
         "filenameStyle": "basic",
     }
@@ -1045,8 +1063,17 @@ async def download_cobalt(
                         if proc.returncode == 0 and os.path.exists(final_target):
                             os.remove(out_path)
                             out_path = final_target
+                        else:
+                            # FALLBACK: Full re-encode
+                            Config.LOGGER.info(f"Cobalt remux failed, falling back to full re-encode")
+                            cmd_encode = ["ffmpeg", "-y", "-i", out_path, "-vcodec", "libx264", "-acodec", "aac", "-pix_fmt", "yuv420p", final_target]
+                            proc_enc = await asyncio.create_subprocess_exec(*cmd_encode, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+                            await proc_enc.communicate()
+                            if proc_enc.returncode == 0 and os.path.exists(final_target):
+                                os.remove(out_path)
+                                out_path = final_target
                     except Exception as remux_err:
-                        Config.LOGGER.error(f"Cobalt extension remuxing failed: {remux_err}")
+                        Config.LOGGER.error(f"Cobalt extension enforcement failed: {remux_err}")
 
             mime = mimetypes.guess_type(out_path)[0] or "video/mp4"
             return out_path, mime
