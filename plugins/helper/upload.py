@@ -644,9 +644,10 @@ async def download_ytdlp(
         "speed": "---"
     }
 
-    # Build a safe output stem from the user-chosen filename
-    # Shorten to 80 chars to avoid OS length limits (e.g. for long Facebook titles)
-    safe_stem = re.sub(r'[\\/*?"<>|:]', "_", os.path.splitext(filename)[0])[:80]
+    # Build a safe output stem and extension from the user-chosen filename
+    filename_root, filename_ext = os.path.splitext(filename)
+    filename_ext = filename_ext.lower().lstrip(".") or "mp4"
+    safe_stem = re.sub(r'[\\/*?"<>|:]', "_", filename_root)[:80]
     if not safe_stem:
         safe_stem = "video_file"
     outtmpl = os.path.join(out_dir, f"{safe_stem}.%(ext)s")
@@ -742,7 +743,7 @@ async def download_ytdlp(
         "force_ipv4": True,
         "nocheckcertificate": True,
         "cookiefile": Config.COOKIES_FILE,
-        "merge_output_format": "mp4",
+        "merge_output_format": filename_ext,
         "overwrites": True,
         "noplaylist": True,
         "max_filesize": Config.MAX_FILE_SIZE,
@@ -858,6 +859,31 @@ async def download_ytdlp(
                         if candidates:
                             downloaded_path = os.path.join(out_dir, candidates[0])
                 
+                # FINAL EXTENSION ENFORCEMENT
+                if downloaded_path and os.path.exists(downloaded_path):
+                    current_ext = os.path.splitext(downloaded_path)[1].lower().lstrip(".")
+                    if current_ext != filename_ext:
+                        Config.LOGGER.info(f"Remuxing output from {current_ext} to {filename_ext} as requested by user.")
+                        final_target = os.path.join(out_dir, f"{safe_stem}_final.{filename_ext}")
+                        try:
+                            # Use ffmpeg to remux without quality loss
+                            cmd = [
+                                "ffmpeg", "-y", "-i", downloaded_path,
+                                "-c", "copy", "-map", "0",
+                                "-ignore_unknown", final_target
+                            ]
+                            proc = await asyncio.create_subprocess_exec(
+                                *cmd,
+                                stdout=asyncio.subprocess.DEVNULL,
+                                stderr=asyncio.subprocess.PIPE
+                            )
+                            _, stderr = await proc.communicate()
+                            if proc.returncode == 0 and os.path.exists(final_target):
+                                os.remove(downloaded_path)
+                                downloaded_path = final_target
+                        except Exception as remux_err:
+                            Config.LOGGER.error(f"Extension remuxing failed: {remux_err}")
+                
                 if not downloaded_path or not os.path.exists(downloaded_path):
                     raise FileNotFoundError("Error: output file not found after download")
 
@@ -900,7 +926,9 @@ async def download_cobalt(
     start_time_ref[0] = time.time()
     out_dir = Config.DOWNLOAD_LOCATION
     os.makedirs(out_dir, exist_ok=True)
-    safe_stem = re.sub(r'[\\/*?"<>|:]', "_", os.path.splitext(filename)[0])[:80]
+    filename_root, filename_ext = os.path.splitext(filename)
+    filename_ext = filename_ext.lower().lstrip(".") or "mp4"
+    safe_stem = re.sub(r'[\\/*?"<>|:]', "_", filename_root)[:80]
 
     api_url = Config.COBALT_API_URL.rstrip("/")
     payload = {
@@ -1003,6 +1031,22 @@ async def download_cobalt(
                 except:
                     pass
                 raise ValueError("Downloaded file from secondary server is empty (0 bytes).")
+
+            # FINAL EXTENSION ENFORCEMENT
+            if os.path.exists(out_path):
+                current_ext = os.path.splitext(out_path)[1].lower().lstrip(".")
+                if current_ext != filename_ext:
+                    Config.LOGGER.info(f"Remuxing cobalt output from {current_ext} to {filename_ext}")
+                    final_target = os.path.join(out_dir, f"{safe_stem}_cobalt_final.{filename_ext}")
+                    try:
+                        cmd = ["ffmpeg", "-y", "-i", out_path, "-c", "copy", "-map", "0", "-ignore_unknown", final_target]
+                        proc = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+                        await proc.communicate()
+                        if proc.returncode == 0 and os.path.exists(final_target):
+                            os.remove(out_path)
+                            out_path = final_target
+                    except Exception as remux_err:
+                        Config.LOGGER.error(f"Cobalt extension remuxing failed: {remux_err}")
 
             mime = mimetypes.guess_type(out_path)[0] or "video/mp4"
             return out_path, mime
@@ -1206,10 +1250,9 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
     download_dir = Config.DOWNLOAD_LOCATION
     os.makedirs(download_dir, exist_ok=True)
 
-    # Remap streaming extensions to proper container (e.g. .m3u8 → .mp4)
-    filename = smart_output_name(filename)
-    # Shorten to 80 chars to avoid OS length limits
-    safe_name = re.sub(r'[\\/*?:"<>|]', "_", filename)[:80]
+    filename_root, filename_ext = os.path.splitext(filename)
+    filename_ext = filename_ext.lower().lstrip(".") or "mp4"
+    safe_name = re.sub(r'[\\/*?:"<>|]', "_", filename_root)[:80] + "." + filename_ext
     file_path = os.path.join(download_dir, safe_name)
 
     headers = {
@@ -1316,8 +1359,6 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
 
     # ── Route HLS / DASH / TS streams through ffmpeg ──────────────────────────
     if needs_ffmpeg_download(url, mime):
-        # Force mp4 output path
-        mp4_path = os.path.splitext(file_path)[0] + ".mp4"
         try:
             await progress_msg.edit_text(
                 "📥 **Downloading stream…**\n"
@@ -1326,8 +1367,10 @@ async def download_url(url: str, filename: str, progress_msg, start_time_ref: li
             )
         except Exception:
             pass
-        await _download_hls(url, mp4_path, progress_msg, start_time_ref, user_id, cancel_ref=cancel_ref)
-        return mp4_path, "video/mp4"
+        
+        # Respect user extension for stream download
+        await _download_hls(url, file_path, progress_msg, start_time_ref, user_id, cancel_ref=cancel_ref)
+        return file_path, mimetypes.guess_type(file_path)[0] or "video/mp4"
 
     # ── Aria2c High Speed Download ──────────────────────────────────────────────
     if total > Config.MAX_FILE_SIZE:
