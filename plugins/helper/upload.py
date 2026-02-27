@@ -599,14 +599,21 @@ async def fetch_ytdlp_formats(url: str) -> dict:
 async def check_ffmpeg() -> bool:
     """Check if ffmpeg is available."""
     try:
+        bin_path = _get_ffmpeg_bin()
         proc = await asyncio.create_subprocess_exec(
-            _get_ffmpeg_bin(), "-version",
+            bin_path, "-version",
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.DEVNULL
         )
         await proc.wait()
-        return proc.returncode == 0
-    except Exception:
+        if proc.returncode == 0:
+            Config.LOGGER.info(f"FFmpeg found at {bin_path}")
+            return True
+        else:
+            Config.LOGGER.warning(f"FFmpeg check failed: {bin_path} returned {proc.returncode}. Merge and re-encoding will be disabled.")
+            return False
+    except Exception as e:
+        Config.LOGGER.warning(f"FFmpeg check failed: {e}. Merge and re-encoding will be disabled.")
         return False
 
 
@@ -1672,6 +1679,10 @@ async def upload_file(
     )
     if thumb_local:
         kwargs["thumb"] = thumb_local
+
+    # ── FINAL DEBUG ───────────────────────────────────────────────────────────
+    file_ext = os.path.splitext(file_path)[1].lower()
+    Config.LOGGER.info(f"FINAL UPLOAD: path={file_path}, ext={file_ext}, mime={mime}, is_video={is_video}")
 
     # ── 4. Send to Telegram ───────────────────────────────────────────────────
     try:
