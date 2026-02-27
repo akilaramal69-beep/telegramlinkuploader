@@ -12,6 +12,7 @@ from pyrogram import Client, idle, filters
 import app  # noqa: F401
 
 from utils.shared import bot_client, WEBAPP_PROGRESS
+from plugins.helper.upload import check_ffmpeg
 
 # Register a global ping handler for diagnostics
 @bot_client.on_message(filters.command("ping") & filters.private)
@@ -138,6 +139,17 @@ if __name__ == "__main__":
     # ── Lifecycle: start → mark healthy → idle → shutdown ────────────────
     async def main():
         print("🔧 Initializing main coroutine...")
+        
+        # Check for FFmpeg at startup
+        if not await check_ffmpeg():
+            print("\n" + "!" * 60)
+            print("⚠️  WARNING: FFmpeg not detected!")
+            print("   The bot requires FFmpeg to merge high-quality videos and convert GIFs.")
+            print("   Please run: bash setup_ffmpeg.sh")
+            print("!" * 60 + "\n")
+        else:
+            print("✅ FFmpeg is available for media processing.")
+
         # Try to connect and verify identity
         print("🔗 Connecting bot client...")
         await bot_client.start()
